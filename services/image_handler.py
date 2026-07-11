@@ -24,15 +24,15 @@ def bytes_to_b64_image(data: bytes, mime: str = "image/png") -> str:
     return f"data:{mime};base64,{b64}"
 
 
-async def build_image_content(message: discord.Message) -> List[dict]:
-    """Build OpenAI-style image_url content blocks from image attachments."""
+async def build_image_content(message: discord.Message) -> List[str]:
+    """Return base64 data URIs for image attachments in the message."""
     images = []
     for attachment in message.attachments:
         if not attachment.content_type or not attachment.content_type.startswith("image/"):
             continue
         data = await download_attachment(attachment.url)
         b64 = bytes_to_b64_image(data, mime=attachment.content_type)
-        images.append({"type": "image_url", "image_url": {"url": b64}})
+        images.append(b64)
     return images
 
 

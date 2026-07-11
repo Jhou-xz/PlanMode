@@ -1,6 +1,8 @@
-from sqlalchemy import select
+from datetime import datetime
+from typing import List, Optional
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
-from database.models import User
+from database.models import User, Message, Reminder, Idea, Memory
 
 
 async def get_or_create_user(
@@ -28,3 +30,106 @@ async def set_user_timezone(session: AsyncSession, user: User, timezone: str) ->
     await session.commit()
     await session.refresh(user)
     return user
+
+
+async def create_message(
+    session: AsyncSession,
+    user_id: int,
+    raw_type: str,
+    original_text: Optional[str],
+    attachment_urls: List[str],
+    parsed_intent: Optional[str],
+    parsed_entities: Optional[dict],
+) -> Message:
+    msg = Message(
+        user_id=user_id,
+        raw_type=raw_type,
+        original_text=original_text,
+        attachment_urls=attachment_urls,
+        parsed_intent=parsed_intent,
+        parsed_entities=parsed_entities,
+    )
+    session.add(msg)
+    await session.commit()
+    await session.refresh(msg)
+    return msg
+
+
+async def create_reminder(
+    session: AsyncSession,
+    user_id: int,
+    source_message_id: Optional[int],
+    title: str,
+    description: Optional[str],
+    remind_at: datetime,
+) -> Reminder:
+    r = Reminder(
+        user_id=user_id,
+        source_message_id=source_message_id,
+        title=title,
+        description=description,
+        remind_at=remind_at,
+    )
+    session.add(r)
+    await session.commit()
+    await session.refresh(r)
+    return r
+
+
+async def create_idea(
+    session: AsyncSession,
+    user_id: int,
+    source_message_id: Optional[int],
+    content: str,
+    category: Optional[str],
+) -> Idea:
+    i = Idea(
+        user_id=user_id,
+        source_message_id=source_message_id,
+        content=content,
+        category=category,
+    )
+    session.add(i)
+    await session.commit()
+    await session.refresh(i)
+    return i
+
+
+async def get_reminder_by_id(session: AsyncSession, reminder_id: int) -> Optional[Reminder]:
+    result = await session.execute(select(Reminder).where(Reminder.id == reminder_id))
+    return result.scalar_one_or_none()
+
+
+async def mark_reminder_sent(session: AsyncSession, reminder: Reminder) -> None:
+    from database.models import utc_now
+    reminder.sent_at = utc_now()
+    await session.commit()
+
+
+async def get_messages_since(
+    session: AsyncSession, user_id: int, since: datetime
+) -> List[Message]:
+    result = await session.execute(
+        select(Message)
+        .where(Message.user_id == user_id)
+        .where(Message.created_at >= since)
+        .order_by(desc(Message.created_at))
+    )
+    return result.scalars().all()
+
+
+async def get_upcoming_reminders(
+    session: AsyncSession,
+    user_id: int,
+    start: datetime,
+    end: datetime,
+) -> List[Reminder]:
+    result = await session.execute(
+        select(Reminder)
+        .where(Reminder.user_id == user_id)
+        .where(Reminder.remind_at >= start)
+        .where(Reminder.remind_at < end)
+        .where(Reminder.is_done == False)
+        .order_by(Reminder.remind_at)
+    )
+    return result.scalars().all()
