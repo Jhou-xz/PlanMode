@@ -17,6 +17,7 @@ from services.intent_parser import parse_intent
 from services.memory import get_memories_for_prompt, save_memories
 from services.queries import answer_query
 from services.schedule_image import generate_weekly_image
+from services.status_report import build_status_report
 from services.scheduler import (
     schedule_reminder,
     schedule_daily_summary,
@@ -160,6 +161,8 @@ async def handle_message(message: discord.Message):
             query_result = await answer_query(
                 session, user, extracted["text"], q.get("question_type", "upcoming")
             )
+        elif parsed.get("intent") == "status_report":
+            query_result = await build_status_report(session, user)
         elif parsed.get("intent") == "schedule_request":
             week_start = None
             sr = parsed["entities"].get("schedule_request") or {}

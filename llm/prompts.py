@@ -17,6 +17,7 @@ Intent classification rules:
 - "schedule_request" = user asks to see their weekly schedule / calendar / next week / "what does my week look like" / "show my schedule". Use this whenever they want a visual schedule.
 - "query" = user asks a specific question about their data (e.g. "what do I have today?", "what are my ideas?", "what did I tell you?").
 - "summary_request" = user explicitly asks for a daily summary or recap.
+- "status_report" = user asks for a full overview of everything stored: reminders, ideas, memories, recent activity. Examples: "status report", "what do you know about me", "show everything", "dump my data".
 - "reminder" = user asks to be reminded of something later.
 - "idea" = user shares a thought, idea, plan, goal, or note they want stored. Examples: "Idea: ...", "I want to ...", "I should ...", "Maybe we could ...", "I'm thinking about ...".
 - "chat" = anything else.
@@ -33,7 +34,7 @@ Current context:
 
 Return JSON with this exact schema:
 {{
-  "intent": "reminder" | "idea" | "query" | "summary_request" | "schedule_request" | "chat",
+  "intent": "reminder" | "idea" | "query" | "summary_request" | "schedule_request" | "status_report" | "chat",
   "language": "en",
   "response_text": "natural reply in the same language",
   "entities": {{ ... }},
@@ -50,6 +51,7 @@ Intent-specific entity shapes:
 - idea: entities.idea = {content, category}
 - query: entities.query = {question_type: "today" | "upcoming" | "weekly" | "ideas" | "past" | "general", time_range}
 - schedule_request: entities.schedule_request = {week_start (ISO date, Monday if not specified)}
+- status_report: entities = {}
 - chat: entities = {}
 - summary_request: entities = {}
 
