@@ -1,6 +1,24 @@
 import discord
 from database.crud import get_or_create_user
 from database.core import async_session
+from services.transcription import transcribe_audio
+
+
+async def extract_text_from_message(message: discord.Message) -> dict:
+    """Returns {"text": str, "type": str, "language": str | None}"""
+    text = message.content.strip()
+    detected_type = "text"
+    language = None
+
+    if message.flags.voice and message.attachments:
+        audio = message.attachments[0]
+        audio_bytes = await audio.read()
+        result = await transcribe_audio(audio_bytes, filename=audio.filename)
+        text = result["text"]
+        language = result["language"]
+        detected_type = "voice"
+
+    return {"text": text, "type": detected_type, "language": language}
 
 
 async def handle_message(message: discord.Message):
