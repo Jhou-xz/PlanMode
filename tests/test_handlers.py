@@ -30,7 +30,7 @@ def _patch_session(session):
 async def _setup_user(session, discord_user_id: str, timezone: str):
     user = await get_or_create_user(session, discord_user_id=discord_user_id, discord_username="testuser")
     await session.execute(
-        update(User).where(User.id == user.id).values(timezone=timezone)
+        update(User).where(User.id == user.id).values(timezone=timezone, timezone_set=True)
     )
     await session.commit()
     return user

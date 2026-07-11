@@ -19,6 +19,7 @@ class User(Base):
     discord_user_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     discord_username: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    timezone_set: Mapped[bool] = mapped_column(Boolean, default=False)
     summary_time: Mapped[time] = mapped_column(default=time(22, 0))
     preferred_language: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

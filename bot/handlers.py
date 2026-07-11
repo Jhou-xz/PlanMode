@@ -9,6 +9,7 @@ from database.crud import (
     create_idea,
 )
 from database.core import async_session
+from llm.deepseek_client import chat_completion
 from services.transcription import transcribe_audio
 from services.image_handler import build_image_content
 from services.intent_parser import parse_intent
@@ -20,6 +21,50 @@ from services.scheduler import (
     schedule_daily_summary,
     schedule_memory_compression,
 )
+from services.timezone import resolve_timezone, build_timezone_prompt
+
+
+def _is_timezone_skip(text: str) -> bool:
+    return text.lower() in {"skip", "utc", "gmt", "utc+0", "gmt+0"}
+
+
+async def _ask_timezone(message: discord.Message):
+    await message.channel.send(
+        "Hi! I'm Plan Mode. What timezone are you in?\n"
+        "You can just say a city or country like `Shanghai`, `New York`, or `Germany`."
+    )
+
+
+async def _llm_parse_timezone(text: str) -> str:
+    try:
+        return await chat_completion(build_timezone_prompt(text), json_mode=False, temperature=0.0)
+    except Exception:
+        return "UNKNOWN"
+
+
+async def _handle_timezone_input(message: discord.Message, user, session):
+    text = message.content.strip()
+
+    if _is_timezone_skip(text):
+        await set_user_timezone(session, user, "UTC")
+        schedule_daily_summary(user)
+        schedule_memory_compression(user)
+        await message.channel.send("Got it — I'll use UTC for now. You can change it anytime by saying 'set my timezone to ...'")
+        return True
+
+    tz = await resolve_timezone(text, llm_parse_fn=_llm_parse_timezone)
+    if tz:
+        await set_user_timezone(session, user, tz)
+        schedule_daily_summary(user)
+        schedule_memory_compression(user)
+        await message.channel.send(f"Got it — timezone set to {tz}.")
+        return True
+
+    await message.channel.send(
+        "I didn't recognize that timezone. Could you tell me a nearby city or country? "
+        "(e.g. `Shanghai`, `New York`, `Germany`, or `UTC`)"
+    )
+    return True
 
 
 async def extract_text_from_message(message: discord.Message) -> dict:
@@ -50,23 +95,10 @@ async def handle_message(message: discord.Message):
             discord_username=str(message.author),
         )
 
-        if user.timezone == "UTC":
-            tz = message.content.strip()
-            if tz in ["UTC", "skip"]:
-                pass
-            else:
-                try:
-                    ZoneInfo(tz)
-                    await set_user_timezone(session, user, tz)
-                    schedule_daily_summary(user)
-                    schedule_memory_compression(user)
-                    await message.channel.send(f"Timezone set to {tz}.")
-                    return
-                except Exception:
-                    await message.channel.send(
-                        "Please send a valid IANA timezone like `Asia/Shanghai`."
-                    )
-                    return
+        if not user.timezone_set:
+            handled = await _handle_timezone_input(message, user, session)
+            if handled:
+                return
 
         extracted = await extract_text_from_message(message)
         has_image = any(

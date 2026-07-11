@@ -27,6 +27,7 @@ async def get_or_create_user(
 
 async def set_user_timezone(session: AsyncSession, user: User, timezone: str) -> User:
     user.timezone = timezone
+    user.timezone_set = True
     await session.commit()
     await session.refresh(user)
     return user
