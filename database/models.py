@@ -1,6 +1,6 @@
 from datetime import datetime, time, timezone
 from typing import List, Optional
-from sqlalchemy import ForeignKey, JSON, String, Boolean, Integer
+from sqlalchemy import ForeignKey, JSON, String, Boolean, Integer, DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -21,7 +21,7 @@ class User(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
     summary_time: Mapped[time] = mapped_column(default=time(22, 0))
     preferred_language: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Message(Base):
@@ -35,7 +35,7 @@ class Message(Base):
     parsed_intent: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     parsed_entities: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     compressed: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Reminder(Base):
@@ -46,10 +46,10 @@ class Reminder(Base):
     source_message_id: Mapped[Optional[int]] = mapped_column(ForeignKey("messages.id"), nullable=True)
     title: Mapped[str] = mapped_column(String(512))
     description: Mapped[Optional[str]] = mapped_column(nullable=True)
-    remind_at: Mapped[datetime] = mapped_column(index=True)
+    remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     is_done: Mapped[bool] = mapped_column(Boolean, default=False)
-    sent_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=utc_now)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Idea(Base):
@@ -60,7 +60,7 @@ class Idea(Base):
     source_message_id: Mapped[Optional[int]] = mapped_column(ForeignKey("messages.id"), nullable=True)
     content: Mapped[str]
     category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Memory(Base):
@@ -72,6 +72,6 @@ class Memory(Base):
     content: Mapped[str]
     importance: Mapped[int] = mapped_column(Integer, default=1)
     source_message_ids: Mapped[List[int]] = mapped_column(JSON, default=list)
-    compressed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(default=utc_now)
+    compressed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
