@@ -13,6 +13,7 @@ from services.transcription import transcribe_audio
 from services.image_handler import build_image_content
 from services.intent_parser import parse_intent
 from services.queries import answer_query
+from services.schedule_image import generate_weekly_image
 from services.scheduler import (
     schedule_reminder,
     schedule_daily_summary,
@@ -103,16 +104,21 @@ async def handle_message(message: discord.Message):
             await create_idea(session, user.id, msg.id, i["content"], i.get("category"))
 
         query_result = ""
+        schedule_image_path = ""
         if parsed.get("intent") == "query" and parsed["entities"].get("query"):
             q = parsed["entities"]["query"]
             query_result = await answer_query(
                 session, user, extracted["text"], q.get("question_type", "upcoming")
             )
+        elif parsed.get("intent") == "schedule_request":
+            schedule_image_path = await generate_weekly_image(session, user)
 
         response_text = parsed.get("response_text", "Got it.")
         if query_result:
             response_text = query_result
         await message.channel.send(response_text[:1900])
+        if schedule_image_path:
+            await message.channel.send(file=discord.File(schedule_image_path))
 
         if parsed.get("language"):
             user.preferred_language = parsed["language"]
