@@ -1,34 +1,28 @@
 import discord
-from datetime import datetime
-from zoneinfo import ZoneInfo
-from database.crud import (
-    get_or_create_user,
-    set_user_timezone,
-    create_message,
-    create_reminder,
-    create_idea,
-    get_recent_messages_for_prompt,
-)
 from database.core import async_session
-from llm.deepseek_client import chat_completion
+from database.crud import get_or_create_user, set_user_timezone
+from services.agent import run_agent
+from services.image_handler import build_image_content, ocr_image
+from services.scheduler import schedule_daily_summary, schedule_memory_compression
 from services.transcription import transcribe_audio
-from services.image_handler import build_image_content
-from services.intent_parser import parse_intent
-from services.memory import get_memories_for_prompt, save_memories
-from services.queries import answer_query
-from services.schedule_image import generate_weekly_image
-from services.status_report import build_status_report
-from services.scheduler import (
-    schedule_reminder,
-    schedule_daily_summary,
-    schedule_memory_compression,
-)
-from services.timezone import resolve_timezone, build_timezone_prompt
-from services.date_parser import parse_reminder_datetime, ReminderDateError
+from services.timezone import resolve_timezone
 
 
-def _is_timezone_skip(text: str) -> bool:
-    return text.lower().strip() in {"skip", "utc", "gmt", "utc+0", "gmt+0"}
+async def extract_text_from_message(message: discord.Message) -> dict:
+    """Returns {"text": str, "type": str, "language": str | None}"""
+    text = message.content.strip()
+    detected_type = "text"
+    language = None
+
+    if message.flags.voice and message.attachments:
+        audio = message.attachments[0]
+        audio_bytes = await audio.read()
+        result = await transcribe_audio(audio_bytes, filename=audio.filename)
+        text = result["text"]
+        language = result["language"]
+        detected_type = "voice"
+
+    return {"text": text, "type": detected_type, "language": language}
 
 
 async def _is_timezone_change_request(text: str) -> bool:
@@ -37,8 +31,10 @@ async def _is_timezone_change_request(text: str) -> bool:
 
 
 async def _llm_parse_timezone(text: str) -> str:
+    from llm.deepseek_client import chat_completion_text
+    from services.timezone import build_timezone_prompt
     try:
-        return await chat_completion(build_timezone_prompt(text), json_mode=False, temperature=0.0)
+        return await chat_completion_text(build_timezone_prompt(text), temperature=0.0)
     except Exception:
         return "UNKNOWN"
 
@@ -46,7 +42,7 @@ async def _llm_parse_timezone(text: str) -> str:
 async def _handle_timezone_input(message: discord.Message, user, session):
     text = message.content.strip()
 
-    if _is_timezone_skip(text):
+    if text.lower().strip() in {"skip", "utc", "gmt", "utc+0", "gmt+0"}:
         await set_user_timezone(session, user, "UTC")
         schedule_daily_summary(user)
         schedule_memory_compression(user)
@@ -68,23 +64,6 @@ async def _handle_timezone_input(message: discord.Message, user, session):
     return True
 
 
-async def extract_text_from_message(message: discord.Message) -> dict:
-    """Returns {"text": str, "type": str, "language": str | None}"""
-    text = message.content.strip()
-    detected_type = "text"
-    language = None
-
-    if message.flags.voice and message.attachments:
-        audio = message.attachments[0]
-        audio_bytes = await audio.read()
-        result = await transcribe_audio(audio_bytes, filename=audio.filename)
-        text = result["text"]
-        language = result["language"]
-        detected_type = "voice"
-
-    return {"text": text, "type": detected_type, "language": language}
-
-
 async def handle_message(message: discord.Message):
     if message.author.bot or not isinstance(message.channel, discord.DMChannel):
         return
@@ -100,7 +79,6 @@ async def handle_message(message: discord.Message):
         if extracted["type"] == "voice" and extracted["text"]:
             await message.channel.send(f"🎤 I heard: {extracted['text'][:1900]}")
 
-        # Default timezone is Asia/Shanghai. Only change if user explicitly asks.
         if await _is_timezone_change_request(extracted["text"]):
             handled = await _handle_timezone_input(message, user, session)
             if handled:
@@ -112,86 +90,29 @@ async def handle_message(message: discord.Message):
         )
         images_b64 = await build_image_content(message) if has_image else []
 
-        history = await get_recent_messages_for_prompt(session, user.id, limit=15)
-        memories = await get_memories_for_prompt(session, user.id, limit=20)
-        parsed = await parse_intent(
-            extracted["text"], user.timezone, memories, history, images_b64
-        )
+        # If the LLM later rejects the image, we can fall back to OCR; the agent
+        # will receive the image in the message content. We do not OCR here by
+        # default to avoid extra work when the LLM succeeds.
 
-        raw_type = "mixed" if (images_b64 and extracted["type"] != "text") else extracted["type"]
-        msg = await create_message(
+        final_text, image_paths = await run_agent(
             session,
-            user.id,
-            raw_type,
+            user,
             extracted["text"],
-            [a.url for a in message.attachments],
-            parsed.get("intent"),
-            parsed.get("entities"),
-            role="user",
+            images_b64=images_b64,
+            raw_type=extracted["type"],
         )
 
-        if parsed.get("new_memories"):
-            await save_memories(session, user.id, parsed["new_memories"])
+        await message.channel.send(final_text[:1900])
 
-        response_text = parsed.get("response_text", "Got it.")
-        schedule_image_path = ""
-
-        if "schedule_reminder" in parsed.get("actions", []) and parsed["entities"].get("reminder"):
-            r = parsed["entities"]["reminder"]
+        files_to_send = []
+        for path in image_paths:
             try:
-                remind_at = await parse_reminder_datetime(
-                    r["remind_at"],
-                    r.get("original_time_expression"),
-                    user.timezone,
-                )
-                reminder = await create_reminder(
-                    session, user.id, msg.id, r["title"], r.get("description"), remind_at
-                )
-                schedule_reminder(reminder)
-            except ReminderDateError as exc:
-                response_text = exc.message
+                files_to_send.append(discord.File(path))
+            except Exception:
+                pass
+        if files_to_send:
+            await message.channel.send(files=files_to_send)
 
-        if "store_idea" in parsed.get("actions", []) and parsed["entities"].get("idea"):
-            i = parsed["entities"]["idea"]
-            await create_idea(session, user.id, msg.id, i["content"], i.get("category"))
-
-        query_result = ""
-        if parsed.get("intent") == "query" and parsed["entities"].get("query"):
-            q = parsed["entities"]["query"]
-            query_result = await answer_query(
-                session, user, extracted["text"], q.get("question_type", "upcoming")
-            )
-        elif parsed.get("intent") == "status_report":
-            query_result = await build_status_report(session, user)
-        elif parsed.get("intent") == "schedule_request":
-            week_start = None
-            sr = parsed["entities"].get("schedule_request") or {}
-            if sr.get("week_start"):
-                try:
-                    from datetime import datetime as dt
-                    week_start = dt.fromisoformat(sr["week_start"])
-                except Exception:
-                    pass
-            schedule_image_path = await generate_weekly_image(session, user, week_start)
-
-        if query_result:
-            response_text = query_result
-        await message.channel.send(response_text[:1900])
-        if schedule_image_path:
-            await message.channel.send(file=discord.File(schedule_image_path))
-
-        # Persist the assistant's response so it appears in future history.
-        await create_message(
-            session,
-            user.id,
-            "text",
-            response_text[:1900],
-            [],
-            parsed.get("intent"),
-            None,
-            role="assistant",
-        )
-
-        if parsed.get("language"):
-            user.preferred_language = parsed["language"]
+        if extracted.get("language"):
+            user.preferred_language = extracted["language"]
             await session.commit()

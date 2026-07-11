@@ -1,17 +1,16 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.cron import CronTrigger
 from database.core import async_session
-from database.models import Reminder, User
-from database.crud import get_reminder_by_id, mark_reminder_sent
+from database.models import Reminder, Item, User
+from database.crud import get_reminder_by_id, mark_reminder_sent, get_unsent_reminders_before
 from bot.client import bot
 from services.summary import send_daily_summary
 from services.memory_compression import compress_user_memory
-
 
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
@@ -32,14 +31,20 @@ async def _do_send_reminder(reminder_id: int, session: AsyncSession):
         logger.info("Skipping reminder id=%s (not found or already sent)", reminder_id)
         return
 
-    user = await session.get(User, reminder.user_id)
+    item = await session.get(Item, reminder.item_id)
+    if not item:
+        logger.warning("Skipping reminder id=%s: item not found", reminder_id)
+        return
+
+    user = await session.get(User, item.user_id)
     if not user:
         logger.warning("Skipping reminder id=%s: user not found", reminder_id)
         return
 
     discord_user = await bot.fetch_user(int(user.discord_user_id))
     if discord_user:
-        await discord_user.send(f"⏰ Reminder: {reminder.title}")
+        text = f"⏰ Reminder: {reminder.message or item.title}"
+        await discord_user.send(text)
         logger.info("Sent reminder id=%s to discord user %s", reminder_id, user.discord_user_id)
     else:
         logger.warning("Could not fetch Discord user %s for reminder id=%s", user.discord_user_id, reminder_id)
@@ -76,6 +81,24 @@ def schedule_reminder(reminder: Reminder):
         reminder.remind_at.isoformat(),
         job_id,
     )
+
+
+async def schedule_all_pending_reminders(session: AsyncSession | None = None):
+    """Schedule all unsent reminders that are in the future."""
+    if session is None:
+        async with async_session() as session:
+            await _do_schedule_all_pending_reminders(session)
+    else:
+        await _do_schedule_all_pending_reminders(session)
+
+
+async def _do_schedule_all_pending_reminders(session: AsyncSession):
+    now = datetime.now(timezone.utc)
+    future_cutoff = now + timedelta(days=365)
+    reminders = await get_unsent_reminders_before(session, future_cutoff)
+    for reminder in reminders:
+        if reminder.remind_at > now:
+            schedule_reminder(reminder)
 
 
 def schedule_daily_summary(user: User):

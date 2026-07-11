@@ -25,7 +25,7 @@ async def get_memories_for_prompt(
         select(Memory)
         .where(Memory.user_id == user_id)
         .order_by(desc(Memory.importance), desc(Memory.updated_at))
-        .limit(limit * 2)  # fetch more so dedup has a pool to choose from
+        .limit(limit * 2)
     )
     candidates = result.scalars().all()
 
@@ -42,7 +42,8 @@ async def save_memories(
     session: AsyncSession,
     user_id: int,
     memories: List[dict],
-) -> None:
+    source_item_id: int | None = None,
+) -> List[Memory]:
     """Save new memories, avoiding duplicates against existing entries."""
     result = await session.execute(
         select(Memory)
@@ -50,8 +51,9 @@ async def save_memories(
         .order_by(desc(Memory.created_at))
         .limit(200)
     )
-    existing = result.scalars().all()
+    existing = list(result.scalars().all())
 
+    created: List[Memory] = []
     for mem in memories:
         if not mem.get("content"):
             continue
@@ -66,12 +68,17 @@ async def save_memories(
             category=mem.get("category", "preference"),
             content=content,
             importance=importance,
-            source_message_ids=mem.get("source_message_ids", []),
+            source_item_id=source_item_id or mem.get("source_item_id"),
         )
         session.add(m)
         existing.append(m)
+        created.append(m)
 
-    await session.commit()
+    if created:
+        await session.commit()
+        for m in created:
+            await session.refresh(m)
+    return created
 
 
 def format_memories(memories: List[Memory]) -> str:

@@ -21,7 +21,7 @@ async def compress_old_messages(session: AsyncSession, user: User):
     if not messages:
         return
 
-    texts = [f"{m.created_at.isoformat()}: {m.original_text}" for m in messages if m.original_text]
+    texts = [f"{m.created_at.isoformat()}: {m.content}" for m in messages if m.content]
     if not texts:
         return
 

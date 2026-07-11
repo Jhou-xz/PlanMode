@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.ext.asyncio import AsyncSession
-from database.crud import get_upcoming_reminders
+from database import crud
 
 # Color palette — modern dark UI with soft accents
 BG_COLOR = "#0f0f1a"
@@ -15,11 +15,6 @@ ACCENT_COLOR = "#89b4fa"
 TODAY_ACCENT = "#f38ba8"
 BORDER_COLOR = "#313244"
 EVENT_COLORS = ["#89b4fa", "#a6e3a1", "#f9e2af", "#fab387", "#cba6f7", "#f38ba8", "#94e2d5"]
-
-
-def _hex_to_rgb(hex_color: str) -> tuple:
-    hex_color = hex_color.lstrip("#")
-    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
 
 
 async def generate_weekly_image(
@@ -39,7 +34,7 @@ async def generate_weekly_image(
     monday = monday - timedelta(days=monday.weekday())
     sunday = monday + timedelta(days=6)
 
-    reminders = await get_upcoming_reminders(
+    items = await crud.get_items_for_time_range(
         session, user.id, monday, monday + timedelta(days=7)
     )
 
@@ -60,7 +55,7 @@ async def generate_weekly_image(
     draw.rectangle([0, 0, width, 110], fill=HEADER_COLOR)
     draw.text((40, 35), f"Plan Mode — {monday.strftime('%b %d')} to {sunday.strftime('%b %d, %Y')}",
               fill=TEXT_COLOR, font=font_title)
-    draw.text((40, 78), f"Timezone: {user.timezone} • {len(reminders)} events",
+    draw.text((40, 78), f"Timezone: {user.timezone} • {len(items)} events",
               fill=SUBTEXT_COLOR, font=font_small)
 
     # Subtle decorative line
@@ -75,13 +70,16 @@ async def generate_weekly_image(
 
     today = now.date()
 
-    # Group reminders by day
+    # Group items by day
     by_day = {i: [] for i in range(7)}
-    for r in reminders:
-        r_local = r.remind_at.astimezone(tz)
-        day_index = (r_local.date() - monday.date()).days
+    for item in items:
+        event_time = item.start_time or item.due_date
+        if event_time is None:
+            continue
+        local_time = event_time.astimezone(tz)
+        day_index = (local_time.date() - monday.date()).days
         if 0 <= day_index < 7:
-            by_day[day_index].append(r)
+            by_day[day_index].append(item)
 
     for i in range(7):
         day = monday + timedelta(days=i)
@@ -105,11 +103,12 @@ async def generate_weekly_image(
         draw.text((x + 14, header_y + 30), date_text, fill=SUBTEXT_COLOR, font=font_small)
 
         # Events
-        events = sorted(by_day[i], key=lambda r: r.remind_at)
+        events = sorted(by_day[i], key=lambda i: i.start_time or i.due_date or i.created_at)
         y = top + 75
-        for idx, r in enumerate(events):
-            r_local = r.remind_at.astimezone(tz)
-            time_str = r_local.strftime("%H:%M")
+        for idx, item in enumerate(events):
+            event_time = item.start_time or item.due_date
+            local_time = event_time.astimezone(tz)
+            time_str = local_time.strftime("%H:%M")
             color = EVENT_COLORS[idx % len(EVENT_COLORS)]
             # Event pill
             pill_height = 52
@@ -119,7 +118,7 @@ async def generate_weekly_image(
                 fill=color,
             )
             # Title (truncated)
-            title = r.title[:22] if r.title else "(no title)"
+            title = item.title[:22] if item.title else "(no title)"
             draw.text((x + 18, y + 6), title, fill="#11111b", font=font_event)
             draw.text((x + 18, y + 28), time_str, fill="#313244", font=font_small)
             y += pill_height + 10

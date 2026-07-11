@@ -13,11 +13,8 @@ async def test_compress_old_messages(session):
     await create_message(
         session,
         user_id=user.id,
-        raw_type="text",
-        original_text="I love hiking on weekends.",
-        attachment_urls=[],
-        parsed_intent="chat",
-        parsed_entities={},
+        role="user",
+        content="I love hiking on weekends.",
     )
     # Update created_at to be old (direct SQL update via model)
     from database.models import Message

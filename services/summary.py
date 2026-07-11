@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.core import async_session
-from database.crud import get_messages_since, get_upcoming_reminders
+from database import crud
 from database.models import User
 from llm.deepseek_client import stream_chat_completion
 from services.memory import format_memories, get_memories_for_prompt
@@ -15,9 +15,9 @@ async def generate_daily_summary(session: AsyncSession, user: User) -> str:
     yesterday_start = today_start - timedelta(days=1)
     tomorrow_start = today_start + timedelta(days=1)
 
-    messages = await get_messages_since(session, user.id, yesterday_start)
-    reminders_today = await get_upcoming_reminders(session, user.id, today_start, tomorrow_start)
-    reminders_tomorrow = await get_upcoming_reminders(
+    messages = await crud.get_messages_since(session, user.id, yesterday_start)
+    today_items = await crud.get_items_for_time_range(session, user.id, today_start, tomorrow_start)
+    tomorrow_items = await crud.get_items_for_time_range(
         session, user.id, tomorrow_start, tomorrow_start + timedelta(days=1)
     )
     memories = await get_memories_for_prompt(session, user.id, limit=10)
@@ -25,13 +25,13 @@ async def generate_daily_summary(session: AsyncSession, user: User) -> str:
     prompt = f"""You are Plan Mode. Write a friendly daily summary for the user in their language.
 
 Yesterday's messages:
-{[m.original_text for m in messages if m.original_text]}
+{[m.content for m in messages if m.content]}
 
-Today's reminders:
-{[r.title for r in reminders_today]}
+Today's scheduled items:
+{[i.title for i in today_items]}
 
-Tomorrow's reminders:
-{[r.title for r in reminders_tomorrow]}
+Tomorrow's scheduled items:
+{[i.title for i in tomorrow_items]}
 
 {format_memories(memories)}
 
