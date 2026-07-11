@@ -8,6 +8,7 @@ from database.models import Reminder, User
 from database.crud import get_reminder_by_id, mark_reminder_sent
 from bot.client import bot
 from services.summary import send_daily_summary
+from services.memory_compression import compress_user_memory
 
 
 scheduler = AsyncIOScheduler()
@@ -64,3 +65,28 @@ async def _do_schedule_all_daily_summaries(session: AsyncSession):
     users = result.scalars().all()
     for user in users:
         schedule_daily_summary(user)
+
+
+def schedule_memory_compression(user: User):
+    scheduler.add_job(
+        compress_user_memory,
+        trigger=CronTrigger(day_of_week="sun", hour=2, minute=0, timezone=user.timezone),
+        args=[user.id],
+        id=f"memory_compression_{user.id}",
+        replace_existing=True,
+    )
+
+
+async def schedule_all_memory_compression(session: AsyncSession | None = None):
+    if session is None:
+        async with async_session() as session:
+            await _do_schedule_all_memory_compression(session)
+    else:
+        await _do_schedule_all_memory_compression(session)
+
+
+async def _do_schedule_all_memory_compression(session: AsyncSession):
+    result = await session.execute(select(User))
+    users = result.scalars().all()
+    for user in users:
+        schedule_memory_compression(user)

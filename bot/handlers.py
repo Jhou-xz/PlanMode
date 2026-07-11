@@ -13,7 +13,11 @@ from services.transcription import transcribe_audio
 from services.image_handler import build_image_content
 from services.intent_parser import parse_intent
 from services.queries import answer_query
-from services.scheduler import schedule_reminder, schedule_daily_summary
+from services.scheduler import (
+    schedule_reminder,
+    schedule_daily_summary,
+    schedule_memory_compression,
+)
 
 
 async def extract_text_from_message(message: discord.Message) -> dict:
@@ -53,6 +57,7 @@ async def handle_message(message: discord.Message):
                     ZoneInfo(tz)
                     await set_user_timezone(session, user, tz)
                     schedule_daily_summary(user)
+                    schedule_memory_compression(user)
                     await message.channel.send(f"Timezone set to {tz}.")
                     return
                 except Exception:
