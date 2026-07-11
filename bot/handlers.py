@@ -12,6 +12,7 @@ from database.core import async_session
 from services.transcription import transcribe_audio
 from services.image_handler import build_image_content
 from services.intent_parser import parse_intent
+from services.queries import answer_query
 from services.scheduler import schedule_reminder, schedule_daily_summary
 
 
@@ -96,7 +97,16 @@ async def handle_message(message: discord.Message):
             i = parsed["entities"]["idea"]
             await create_idea(session, user.id, msg.id, i["content"], i.get("category"))
 
+        query_result = ""
+        if parsed.get("intent") == "query" and parsed["entities"].get("query"):
+            q = parsed["entities"]["query"]
+            query_result = await answer_query(
+                session, user, extracted["text"], q.get("question_type", "upcoming")
+            )
+
         response_text = parsed.get("response_text", "Got it.")
+        if query_result:
+            response_text = query_result
         await message.channel.send(response_text[:1900])
 
         if parsed.get("language"):
