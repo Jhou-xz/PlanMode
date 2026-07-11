@@ -28,5 +28,5 @@ async def test_send_reminder_skips_if_already_sent(session):
     await session.commit()
 
     with patch("services.scheduler.bot.fetch_user", new=AsyncMock()) as mock_fetch:
-        await send_reminder(reminder.id)
+        await send_reminder(reminder.id, session=session)
         mock_fetch.assert_not_awaited()

@@ -14,21 +14,28 @@ from services.memory_compression import compress_user_memory
 scheduler = AsyncIOScheduler()
 
 
-async def send_reminder(reminder_id: int):
-    async with async_session() as session:
-        reminder = await get_reminder_by_id(session, reminder_id)
-        if not reminder or reminder.sent_at:
-            return
+async def send_reminder(reminder_id: int, session: AsyncSession | None = None):
+    if session is None:
+        async with async_session() as session:
+            await _do_send_reminder(reminder_id, session)
+    else:
+        await _do_send_reminder(reminder_id, session)
 
-        user = await session.get(User, reminder.user_id)
-        if not user:
-            return
 
-        discord_user = await bot.fetch_user(int(user.discord_user_id))
-        if discord_user:
-            await discord_user.send(f"⏰ Reminder: {reminder.title}")
+async def _do_send_reminder(reminder_id: int, session: AsyncSession):
+    reminder = await get_reminder_by_id(session, reminder_id)
+    if not reminder or reminder.sent_at:
+        return
 
-        await mark_reminder_sent(session, reminder)
+    user = await session.get(User, reminder.user_id)
+    if not user:
+        return
+
+    discord_user = await bot.fetch_user(int(user.discord_user_id))
+    if discord_user:
+        await discord_user.send(f"⏰ Reminder: {reminder.title}")
+
+    await mark_reminder_sent(session, reminder)
 
 
 def schedule_reminder(reminder: Reminder):
