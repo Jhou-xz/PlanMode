@@ -27,14 +27,12 @@ from services.date_parser import parse_reminder_datetime, ReminderDateError
 
 
 def _is_timezone_skip(text: str) -> bool:
-    return text.lower() in {"skip", "utc", "gmt", "utc+0", "gmt+0"}
+    return text.lower().strip() in {"skip", "utc", "gmt", "utc+0", "gmt+0"}
 
 
-async def _ask_timezone(message: discord.Message):
-    await message.channel.send(
-        "Hi! I'm Plan Mode. What timezone are you in?\n"
-        "You can just say a city or country like `Shanghai`, `New York`, or `Germany`."
-    )
+async def _is_timezone_change_request(text: str) -> bool:
+    t = text.lower().strip()
+    return t.startswith(("set timezone", "change timezone", "my timezone is", "timezone is", "set my timezone"))
 
 
 async def _llm_parse_timezone(text: str) -> str:
@@ -51,7 +49,7 @@ async def _handle_timezone_input(message: discord.Message, user, session):
         await set_user_timezone(session, user, "UTC")
         schedule_daily_summary(user)
         schedule_memory_compression(user)
-        await message.channel.send("Got it — I'll use UTC for now. You can change it anytime by saying 'set my timezone to ...'")
+        await message.channel.send("Got it — I'll use UTC. You can change it anytime by saying 'set my timezone to ...'")
         return True
 
     tz = await resolve_timezone(text, llm_parse_fn=_llm_parse_timezone)
@@ -97,14 +95,15 @@ async def handle_message(message: discord.Message):
             discord_username=str(message.author),
         )
 
-        if not user.timezone_set:
-            handled = await _handle_timezone_input(message, user, session)
-            if handled:
-                return
-
         extracted = await extract_text_from_message(message)
         if extracted["type"] == "voice" and extracted["text"]:
             await message.channel.send(f"🎤 I heard: {extracted['text'][:1900]}")
+
+        # Default timezone is Asia/Shanghai. Only change if user explicitly asks.
+        if await _is_timezone_change_request(extracted["text"]):
+            handled = await _handle_timezone_input(message, user, session)
+            if handled:
+                return
 
         has_image = any(
             a.content_type and a.content_type.startswith("image/")
