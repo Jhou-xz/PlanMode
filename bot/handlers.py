@@ -12,6 +12,7 @@ from database.core import async_session
 from services.transcription import transcribe_audio
 from services.image_handler import build_image_content
 from services.intent_parser import parse_intent
+from services.memory import get_memories_for_prompt, save_memories
 from services.queries import answer_query
 from services.schedule_image import generate_weekly_image
 from services.scheduler import (
