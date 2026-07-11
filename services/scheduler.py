@@ -1,9 +1,13 @@
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.cron import CronTrigger
 from database.core import async_session
 from database.models import Reminder, User
 from database.crud import get_reminder_by_id, mark_reminder_sent
 from bot.client import bot
+from services.summary import send_daily_summary
 
 
 scheduler = AsyncIOScheduler()
@@ -34,3 +38,29 @@ def schedule_reminder(reminder: Reminder):
         id=f"reminder_{reminder.id}",
         replace_existing=True,
     )
+
+
+def schedule_daily_summary(user: User):
+    hour, minute = map(int, user.summary_time.strftime("%H:%M").split(":"))
+    scheduler.add_job(
+        send_daily_summary,
+        trigger=CronTrigger(hour=hour, minute=minute, timezone=user.timezone),
+        args=[user.id],
+        id=f"daily_summary_{user.id}",
+        replace_existing=True,
+    )
+
+
+async def schedule_all_daily_summaries(session: AsyncSession | None = None):
+    if session is None:
+        async with async_session() as session:
+            await _do_schedule_all_daily_summaries(session)
+    else:
+        await _do_schedule_all_daily_summaries(session)
+
+
+async def _do_schedule_all_daily_summaries(session: AsyncSession):
+    result = await session.execute(select(User))
+    users = result.scalars().all()
+    for user in users:
+        schedule_daily_summary(user)
