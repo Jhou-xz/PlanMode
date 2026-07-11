@@ -1,0 +1,17 @@
+[Unit]
+Description=Plan Mode Discord Bot
+After=network.target
+
+[Service]
+User=planmode
+Group=planmode
+WorkingDirectory=/opt/plan-mode
+Environment=PYTHONPATH=/opt/plan-mode
+ExecStart=/opt/plan-mode/.venv/bin/python -m main
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
