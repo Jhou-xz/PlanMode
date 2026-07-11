@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, ValidationError
 from llm.deepseek_client import parse_json_completion
 from llm import prompts
 from services.memory import format_memories
+from services.date_parser import parse_time_expression
 from database.models import Memory, Message
 
 
@@ -139,6 +140,7 @@ async def parse_intent(
         user_text, timezone, memories, history_messages, images_b64
     )
     parsed = await parse_json_completion(messages, temperature=0.2)
+    parsed = _rewrite_obviously_wrong_reminder_dates(parsed, timezone)
 
     try:
         validated = IntentResponse(**parsed)
@@ -158,3 +160,40 @@ async def parse_intent_without_history(
 ) -> dict:
     """Backwards-compatible wrapper for callers that do not pass history."""
     return await parse_intent(user_text, timezone, memories, [], images_b64)
+
+
+def _rewrite_obviously_wrong_reminder_dates(parsed: dict, timezone: str) -> dict:
+    """
+    Post-process the LLM response to fix obviously wrong reminder dates.
+
+    The user's natural-language time expression is the source of truth. If the
+    LLM-generated ISO date disagrees on the year or month with the expression,
+    overwrite the ISO date with the expression-derived datetime.
+    """
+    reminder = parsed.get("entities", {}).get("reminder")
+    if not reminder or not reminder.get("original_time_expression") or not reminder.get("remind_at"):
+        return parsed
+
+    expr = reminder["original_time_expression"]
+    iso = reminder["remind_at"]
+
+    try:
+        tz = ZoneInfo(timezone)
+        now_local = datetime.now(tz)
+        expr_dt = parse_time_expression(expr, timezone, now_local)
+        if expr_dt is None:
+            return parsed
+
+        llm_dt = datetime.fromisoformat(iso)
+        if llm_dt.tzinfo is None:
+            llm_dt = llm_dt.replace(tzinfo=tz)
+        llm_dt = llm_dt.astimezone(tz)
+
+        # If the LLM got the year or month wrong, rewrite using the expression.
+        if expr_dt.year != llm_dt.year or expr_dt.month != llm_dt.month:
+            reminder["remind_at"] = expr_dt.isoformat()
+    except Exception:
+        # Don't break parsing if post-processing fails; the date parser will catch it.
+        pass
+
+    return parsed

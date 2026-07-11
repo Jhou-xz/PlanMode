@@ -1,6 +1,6 @@
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
-from dateutil import parser as dateutil_parser
 from dateparser import parse as dateparser_parse
 from zoneinfo import ZoneInfo
 
@@ -13,6 +13,109 @@ class ReminderDateError(ValueError):
         super().__init__(message)
 
 
+# Common expressions that dateparser struggles with on its own.
+# Normalize them into a shape dateparser reliably parses while preserving meaning.
+_WEEKDAYS = "monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+
+
+def _normalize_time_expression(expression: str) -> str:
+    """
+    Rewrite colloquial/relative expressions into forms dateparser parses reliably.
+
+    Examples:
+        - "30 min later" -> "in 30 minutes"
+        - "2 hours later" -> "in 2 hours"
+        - "next Monday at 9am" -> "Monday at 9am"
+    """
+    normalized = expression.strip().lower()
+
+    # "30 min later" / "30 minutes later" / "30 mins later" -> "in 30 minutes"
+    normalized = re.sub(
+        r"(\d+)\s*(?:min|mins|minutes?)\s*later",
+        r"in \1 minutes",
+        normalized,
+    )
+    # "1 hour later" / "2 hours later"
+    normalized = re.sub(
+        r"(\d+)\s*(?:hour|hours?)\s*later",
+        r"in \1 hours",
+        normalized,
+    )
+    # "1 day later" / "2 days later"
+    normalized = re.sub(
+        r"(\d+)\s*(?:day|days?)\s*later",
+        r"in \1 days",
+        normalized,
+    )
+    # "1 week later" / "2 weeks later"
+    normalized = re.sub(
+        r"(\d+)\s*(?:week|weeks?)\s*later",
+        r"in \1 weeks",
+        normalized,
+    )
+    # "1 month later" / "2 months later"
+    normalized = re.sub(
+        r"(\d+)\s*(?:month|months?)\s*later",
+        r"in \1 months",
+        normalized,
+    )
+
+    # dateparser handles "Monday at 9am" with PREFER_DATES_FROM=future
+    # more reliably than "next Monday at 9am".
+    normalized = re.sub(
+        rf"next\s+({_WEEKDAYS})",
+        r"\1",
+        normalized,
+    )
+
+    return normalized
+
+
+def _parse_with_dateparser(expression: str, user_timezone: str, now_local: datetime) -> Optional[datetime]:
+    """Parse a natural-language time expression into a timezone-aware datetime."""
+    normalized = _normalize_time_expression(expression)
+    try:
+        dp_result = dateparser_parse(
+            normalized,
+            settings={
+                "RELATIVE_BASE": now_local,
+                "TIMEZONE": user_timezone,
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "PREFER_DATES_FROM": "future",
+            },
+        )
+        if dp_result:
+            return dp_result.astimezone(ZoneInfo(user_timezone))
+    except Exception:
+        pass
+
+    # If normalization failed, try the original expression as a last dateparser attempt.
+    try:
+        dp_result = dateparser_parse(
+            expression,
+            settings={
+                "RELATIVE_BASE": now_local,
+                "TIMEZONE": user_timezone,
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "PREFER_DATES_FROM": "future",
+            },
+        )
+        if dp_result:
+            return dp_result.astimezone(ZoneInfo(user_timezone))
+    except Exception:
+        pass
+
+    return None
+
+
+def parse_time_expression(expression: str, user_timezone: str, now_local: Optional[datetime] = None) -> Optional[datetime]:
+    """Parse a natural-language time expression into a timezone-aware datetime."""
+    tz = ZoneInfo(user_timezone)
+    if now_local is None:
+        now_local = datetime.now(tz)
+    return _parse_with_dateparser(expression, user_timezone, now_local)
+
+
 async def parse_reminder_datetime(
     iso_string: str,
     original_time_expression: Optional[str],
@@ -21,69 +124,60 @@ async def parse_reminder_datetime(
     """
     Parse and validate a reminder datetime.
 
-    Prefer parsing the original time expression via dateparser (natural language)
-    with the current datetime in the user's timezone as the reference. Fall back
-    to dateutil, then to the LLM-provided ISO string.
+    Priority:
+    1. The original natural-language time expression (e.g. "30 min later",
+       "tomorrow at 4pm", "next Monday at 9am") parsed with `dateparser`.
+    2. LLM-provided ISO string, but only if it is in the future and within a
+       reasonable range (not months or years ahead).
 
-    Raises ReminderDateError if the datetime is more than 30 days in the past
-    or has already passed.
+    Raises ReminderDateError if the datetime cannot be parsed or is not in the future.
     """
     tz = ZoneInfo(user_timezone)
     now_local = datetime.now(tz)
+    # Reasonable scheduling window: allow up to one year ahead.
+    max_future = now_local + timedelta(days=365)
 
     parsed_local: Optional[datetime] = None
+    source = "unknown"
 
+    # 1. Primary source of truth: the user's exact natural-language expression.
     if original_time_expression:
-        # Try dateparser first for natural language like "tomorrow at 4pm".
-        try:
-            dp_result = dateparser_parse(
-                original_time_expression,
-                settings={"RELATIVE_BASE": now_local, "TIMEZONE": user_timezone, "RETURN_AS_TIMEZONE_AWARE": True},
-            )
-            if dp_result:
-                parsed_local = dp_result
-        except Exception:
-            parsed_local = None
+        parsed_local = _parse_with_dateparser(original_time_expression, user_timezone, now_local)
+        if parsed_local:
+            source = "dateparser"
 
-        # Fall back to dateutil if dateparser fails.
-        if parsed_local is None:
-            try:
-                parsed_local = dateutil_parser.parse(
-                    original_time_expression,
-                    default=now_local,
-                    fuzzy=True,
-                )
-                if parsed_local.tzinfo is None:
-                    parsed_local = parsed_local.replace(tzinfo=tz)
-            except Exception:
-                parsed_local = None
+    # 2. Fallback: LLM-provided ISO string. Only trust it if it is a reasonable,
+    #    future datetime. Do not blindly accept far-future or malformed dates.
+    if parsed_local is None and iso_string:
+        try:
+            iso_dt = datetime.fromisoformat(iso_string)
+            if iso_dt.tzinfo is None:
+                iso_dt = iso_dt.replace(tzinfo=tz)
+            iso_dt = iso_dt.astimezone(tz)
+            if now_local < iso_dt <= max_future:
+                parsed_local = iso_dt
+                source = "iso"
+        except Exception:
+            pass
 
     if parsed_local is None:
-        try:
-            parsed_local = datetime.fromisoformat(iso_string)
-            if parsed_local.tzinfo is None:
-                parsed_local = parsed_local.replace(tzinfo=tz)
-        except Exception as exc:
-            raise ReminderDateError(
-                "I couldn't understand that time. Could you rephrase it? "
-                "For example: 'tomorrow at 3pm' or 'next Tuesday at 9am'."
-            ) from exc
-
-    # Ensure the datetime is in the user's timezone and is timezone-aware.
-    parsed_local = parsed_local.astimezone(tz)
-
-    # Reject dates that are more than 30 days in the past.
-    thirty_days_ago = now_local - timedelta(days=30)
-    if parsed_local < thirty_days_ago:
         raise ReminderDateError(
-            "That date looks like it's more than 30 days in the past. "
-            "Please tell me a future date or a recent relative time like 'tomorrow'."
+            "I couldn't understand that time. Could you rephrase it? "
+            "For example: 'tomorrow at 3pm', 'in 30 minutes', or 'next Tuesday at 9am'."
         )
 
-    # Reject dates that have already passed.
-    if parsed_local < now_local:
+    # Reject past dates. A reminder must be in the future.
+    if parsed_local <= now_local:
         raise ReminderDateError(
-            "That time has already passed. Could you give me a future time?"
+            "That time has already passed or is right now. "
+            "Could you give me a future time?"
+        )
+
+    # Reject dates unreasonably far in the future.
+    if parsed_local > max_future:
+        raise ReminderDateError(
+            "That date is too far in the future. "
+            "Please choose a time within the next year."
         )
 
     return parsed_local
