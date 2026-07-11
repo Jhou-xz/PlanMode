@@ -98,6 +98,30 @@ async def create_idea(
     return i
 
 
+async def get_ideas(
+    session: AsyncSession,
+    user_id: int,
+    limit: int = 50,
+    since: Optional[datetime] = None,
+) -> List[Idea]:
+    stmt = (
+        select(Idea)
+        .where(Idea.user_id == user_id)
+        .order_by(desc(Idea.created_at))
+        .limit(limit)
+    )
+    if since is not None:
+        stmt = stmt.where(Idea.created_at >= since)
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
+async def get_ideas_since(
+    session: AsyncSession, user_id: int, since: datetime
+) -> List[Idea]:
+    return await get_ideas(session, user_id, since=since, limit=1000)
+
+
 async def get_reminder_by_id(session: AsyncSession, reminder_id: int) -> Optional[Reminder]:
     result = await session.execute(select(Reminder).where(Reminder.id == reminder_id))
     return result.scalar_one_or_none()

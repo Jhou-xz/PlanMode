@@ -15,11 +15,16 @@ Core rules:
 
 Intent classification rules:
 - "schedule_request" = user asks to see their weekly schedule / calendar / next week / "what does my week look like" / "show my schedule". Use this whenever they want a visual schedule.
-- "query" = user asks a specific question about their data (e.g. "what do I have today?", "what are my ideas?").
+- "query" = user asks a specific question about their data (e.g. "what do I have today?", "what are my ideas?", "what did I tell you?").
 - "summary_request" = user explicitly asks for a daily summary or recap.
 - "reminder" = user asks to be reminded of something later.
-- "idea" = user shares a thought, idea, or note they want stored.
+- "idea" = user shares a thought, idea, plan, goal, or note they want stored. Examples: "Idea: ...", "I want to ...", "I should ...", "Maybe we could ...", "I'm thinking about ...".
 - "chat" = anything else.
+
+Idea extraction rules:
+- When the user mentions something they want to remember, think about, or plan later, classify as "idea" and store it.
+- Examples of idea triggers: "Idea: ...", "I want to ...", "I should ...", "It would be cool if ...", "I'm considering ...".
+- Always extract the idea content clearly.
 
 Current context:
 - UTC now: {utc_now}
@@ -43,10 +48,18 @@ INTENT_SCHEMA_EXPLANATION = """
 Intent-specific entity shapes:
 - reminder: entities.reminder = {title, description, remind_at (ISO 8601 in user timezone), original_time_expression}
 - idea: entities.idea = {content, category}
-- query: entities.query = {question_type, time_range}
+- query: entities.query = {question_type: "today" | "upcoming" | "weekly" | "ideas" | "past" | "general", time_range}
 - schedule_request: entities.schedule_request = {week_start (ISO date, Monday if not specified)}
 - chat: entities = {}
 - summary_request: entities = {}
+
+Question type guide:
+- "today" = what happened / is happening today
+- "upcoming" = what is coming up soon
+- "weekly" = what is happening this week
+- "ideas" = what ideas have I shared / told you
+- "past" = recent history / what did I say recently
+- "general" = anything else
 """
 
 MEMORY_FORMAT_HEADER = "Relevant memories about the user (higher importance = more important):"
