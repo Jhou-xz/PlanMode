@@ -41,9 +41,11 @@ async def create_message(
     attachment_urls: List[str],
     parsed_intent: Optional[str],
     parsed_entities: Optional[dict],
+    role: str = "user",
 ) -> Message:
     msg = Message(
         user_id=user_id,
+        role=role,
         raw_type=raw_type,
         original_text=original_text,
         attachment_urls=attachment_urls,
@@ -134,3 +136,21 @@ async def get_upcoming_reminders(
         .order_by(Reminder.remind_at)
     )
     return result.scalars().all()
+
+
+async def get_recent_messages_for_prompt(
+    session: AsyncSession,
+    user_id: int,
+    limit: int = 15,
+) -> List[Message]:
+    """Return the most recent user/assistant messages, oldest first."""
+    result = await session.execute(
+        select(Message)
+        .where(Message.user_id == user_id)
+        .where(Message.role.in_(["user", "assistant"]))
+        .where(Message.original_text.isnot(None))
+        .order_by(desc(Message.created_at))
+        .limit(limit)
+    )
+    messages = result.scalars().all()
+    return list(reversed(messages))

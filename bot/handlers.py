@@ -7,6 +7,7 @@ from database.crud import (
     create_message,
     create_reminder,
     create_idea,
+    get_recent_messages_for_prompt,
 )
 from database.core import async_session
 from llm.deepseek_client import chat_completion
@@ -22,6 +23,7 @@ from services.scheduler import (
     schedule_memory_compression,
 )
 from services.timezone import resolve_timezone, build_timezone_prompt
+from services.date_parser import parse_reminder_datetime, ReminderDateError
 
 
 def _is_timezone_skip(text: str) -> bool:
@@ -107,8 +109,11 @@ async def handle_message(message: discord.Message):
         )
         images_b64 = await build_image_content(message) if has_image else []
 
-        memories = await get_memories_for_prompt(session, user.id, limit=10)
-        parsed = await parse_intent(extracted["text"], user.timezone, memories, images_b64)
+        history = await get_recent_messages_for_prompt(session, user.id, limit=15)
+        memories = await get_memories_for_prompt(session, user.id, limit=20)
+        parsed = await parse_intent(
+            extracted["text"], user.timezone, memories, history, images_b64
+        )
 
         raw_type = "mixed" if (images_b64 and extracted["type"] != "text") else extracted["type"]
         msg = await create_message(
@@ -119,25 +124,35 @@ async def handle_message(message: discord.Message):
             [a.url for a in message.attachments],
             parsed.get("intent"),
             parsed.get("entities"),
+            role="user",
         )
 
         if parsed.get("new_memories"):
             await save_memories(session, user.id, parsed["new_memories"])
 
+        response_text = parsed.get("response_text", "Got it.")
+        schedule_image_path = ""
+
         if "schedule_reminder" in parsed.get("actions", []) and parsed["entities"].get("reminder"):
             r = parsed["entities"]["reminder"]
-            remind_at = datetime.fromisoformat(r["remind_at"])
-            reminder = await create_reminder(
-                session, user.id, msg.id, r["title"], r.get("description"), remind_at
-            )
-            schedule_reminder(reminder)
+            try:
+                remind_at = await parse_reminder_datetime(
+                    r["remind_at"],
+                    r.get("original_time_expression"),
+                    user.timezone,
+                )
+                reminder = await create_reminder(
+                    session, user.id, msg.id, r["title"], r.get("description"), remind_at
+                )
+                schedule_reminder(reminder)
+            except ReminderDateError as exc:
+                response_text = exc.message
 
         if "store_idea" in parsed.get("actions", []) and parsed["entities"].get("idea"):
             i = parsed["entities"]["idea"]
             await create_idea(session, user.id, msg.id, i["content"], i.get("category"))
 
         query_result = ""
-        schedule_image_path = ""
         if parsed.get("intent") == "query" and parsed["entities"].get("query"):
             q = parsed["entities"]["query"]
             query_result = await answer_query(
@@ -146,12 +161,23 @@ async def handle_message(message: discord.Message):
         elif parsed.get("intent") == "schedule_request":
             schedule_image_path = await generate_weekly_image(session, user)
 
-        response_text = parsed.get("response_text", "Got it.")
         if query_result:
             response_text = query_result
         await message.channel.send(response_text[:1900])
         if schedule_image_path:
             await message.channel.send(file=discord.File(schedule_image_path))
+
+        # Persist the assistant's response so it appears in future history.
+        await create_message(
+            session,
+            user.id,
+            "text",
+            response_text[:1900],
+            [],
+            parsed.get("intent"),
+            None,
+            role="assistant",
+        )
 
         if parsed.get("language"):
             user.preferred_language = parsed["language"]

@@ -8,7 +8,7 @@ from database.models import Message
 
 
 async def test_compress_old_messages(session):
-    user = await get_or_create_user(session, discord_user_id="compress_user", discord_username="compress")
+    user = await get_or_create_user(session, discord_user_id="100000000000000006", discord_username="compress")
     old_time = datetime.now(timezone.utc) - timedelta(days=8)
     await create_message(
         session,

@@ -5,7 +5,7 @@ from services.schedule_image import generate_weekly_image
 
 
 async def test_generate_weekly_image(session):
-    user = await get_or_create_user(session, discord_user_id="image_user", discord_username="image")
+    user = await get_or_create_user(session, discord_user_id="100000000000000005", discord_username="image")
     now = datetime.now(timezone.utc)
     monday = now - timedelta(days=now.weekday())
     remind_at = monday.replace(hour=10, minute=0, second=0, microsecond=0)

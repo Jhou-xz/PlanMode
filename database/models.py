@@ -30,6 +30,7 @@ class Message(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16), default="user")  # user | assistant
     raw_type: Mapped[str] = mapped_column(String(32))  # text | voice | image | mixed
     original_text: Mapped[Optional[str]] = mapped_column(nullable=True)
     attachment_urls: Mapped[List[str]] = mapped_column(JSON, default=list)
