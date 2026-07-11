@@ -3,6 +3,7 @@ from bot.client import bot
 from bot.handlers import handle_message
 from config.settings import settings
 from database.core import init_db
+from services.scheduler import scheduler
 
 
 @bot.event
@@ -12,6 +13,7 @@ async def on_message(message):
 
 async def main():
     await init_db()
+    scheduler.start()
     await bot.start(settings.discord_bot_token)
 
 

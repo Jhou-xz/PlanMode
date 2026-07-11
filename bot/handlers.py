@@ -12,7 +12,7 @@ from database.core import async_session
 from services.transcription import transcribe_audio
 from services.image_handler import build_image_content
 from services.intent_parser import parse_intent
-from services.memory import get_memories_for_prompt, save_memories
+from services.scheduler import schedule_reminder
 
 
 async def extract_text_from_message(message: discord.Message) -> dict:
@@ -86,9 +86,10 @@ async def handle_message(message: discord.Message):
         if "schedule_reminder" in parsed.get("actions", []) and parsed["entities"].get("reminder"):
             r = parsed["entities"]["reminder"]
             remind_at = datetime.fromisoformat(r["remind_at"])
-            await create_reminder(
+            reminder = await create_reminder(
                 session, user.id, msg.id, r["title"], r.get("description"), remind_at
             )
+            schedule_reminder(reminder)
 
         if "store_idea" in parsed.get("actions", []) and parsed["entities"].get("idea"):
             i = parsed["entities"]["idea"]
