@@ -103,6 +103,9 @@ async def handle_message(message: discord.Message):
                 return
 
         extracted = await extract_text_from_message(message)
+        if extracted["type"] == "voice" and extracted["text"]:
+            await message.channel.send(f"🎤 I heard: {extracted['text'][:1900]}")
+
         has_image = any(
             a.content_type and a.content_type.startswith("image/")
             for a in message.attachments
@@ -159,7 +162,15 @@ async def handle_message(message: discord.Message):
                 session, user, extracted["text"], q.get("question_type", "upcoming")
             )
         elif parsed.get("intent") == "schedule_request":
-            schedule_image_path = await generate_weekly_image(session, user)
+            week_start = None
+            sr = parsed["entities"].get("schedule_request") or {}
+            if sr.get("week_start"):
+                try:
+                    from datetime import datetime as dt
+                    week_start = dt.fromisoformat(sr["week_start"])
+                except Exception:
+                    pass
+            schedule_image_path = await generate_weekly_image(session, user, week_start)
 
         if query_result:
             response_text = query_result

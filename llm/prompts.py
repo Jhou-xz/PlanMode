@@ -13,6 +13,14 @@ Core rules:
 9. Assign memory importance from 1 (trivial) to 5 (crucial). Avoid creating duplicate or near-duplicate memories.
 10. If you are uncertain about the user's intent, ask a clarifying question instead of guessing.
 
+Intent classification rules:
+- "schedule_request" = user asks to see their weekly schedule / calendar / next week / "what does my week look like" / "show my schedule". Use this whenever they want a visual schedule.
+- "query" = user asks a specific question about their data (e.g. "what do I have today?", "what are my ideas?").
+- "summary_request" = user explicitly asks for a daily summary or recap.
+- "reminder" = user asks to be reminded of something later.
+- "idea" = user shares a thought, idea, or note they want stored.
+- "chat" = anything else.
+
 Current context:
 - UTC now: {utc_now}
 - User timezone now: {local_now}
@@ -36,7 +44,7 @@ Intent-specific entity shapes:
 - reminder: entities.reminder = {title, description, remind_at (ISO 8601 in user timezone), original_time_expression}
 - idea: entities.idea = {content, category}
 - query: entities.query = {question_type, time_range}
-- schedule_request: entities.schedule_request = {week_start}
+- schedule_request: entities.schedule_request = {week_start (ISO date, Monday if not specified)}
 - chat: entities = {}
 - summary_request: entities = {}
 """
