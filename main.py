@@ -10,6 +10,7 @@ from services.scheduler import (
     scheduler,
     schedule_all_daily_summaries,
     schedule_all_memory_compression,
+    schedule_all_pending_reminders,
 )
 
 LOG_FILE = "/root/plan-mode-project/bot.log"
@@ -39,6 +40,7 @@ async def main():
     setup_logging()
     await init_db()
     scheduler.start()
+    await schedule_all_pending_reminders()
     await schedule_all_daily_summaries()
     await schedule_all_memory_compression()
     await bot.start(settings.discord_bot_token)

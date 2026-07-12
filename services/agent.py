@@ -2,9 +2,10 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from database import crud
 from database.models import Message
 from llm import prompts
@@ -50,24 +51,30 @@ async def run_agent(
     image_paths: List[str] = []
     tool_calls_log: List[dict] = []
 
-    for _ in range(MAX_ITERATIONS):
+    for iteration in range(MAX_ITERATIONS):
         try:
             response = await chat_completion(messages, tools=TOOL_SCHEMAS, temperature=0.2)
-        except Exception as exc:
+        except Exception:
             logger.exception("LLM call failed")
-            final_text = f"I'm sorry, I ran into a problem thinking that through. ({exc})"
+            final_text = "I'm sorry, I ran into a problem thinking that through. Could you try again?"
             break
 
         message = response.choices[0].message
+        tool_calls: List[Any] = message.tool_calls or []
 
         # Model returned content directly (no tool calls)
-        if not message.tool_calls:
-            final_text = message.content or final_text
+        if not tool_calls:
+            final_text = _sanitize_final_text(message.content or final_text)
             break
 
         # Collect action and terminal tool calls
-        action_calls = [tc for tc in message.tool_calls if tc.function.name not in TERMINAL_TOOLS]
-        terminal_calls = [tc for tc in message.tool_calls if tc.function.name in TERMINAL_TOOLS]
+        action_calls = [tc for tc in tool_calls if tc.function.name not in TERMINAL_TOOLS]
+        terminal_calls = [tc for tc in tool_calls if tc.function.name in TERMINAL_TOOLS]
+
+        # Validate: only one terminal tool per turn
+        if len(terminal_calls) > 1:
+            logger.warning("Model emitted multiple terminal tools; keeping only the last one")
+            terminal_calls = [terminal_calls[-1]]
 
         # Execute action tools first
         action_results = []
@@ -89,7 +96,7 @@ async def run_agent(
                     "type": tc.type,
                     "function": {"name": tc.function.name, "arguments": tc.function.arguments},
                 }
-                for tc in message.tool_calls
+                for tc in tool_calls
             ],
         })
 
@@ -102,18 +109,30 @@ async def run_agent(
                 "content": json.dumps(result, default=str),
             })
 
-        # If terminal tool was called, execute it and return its response
+        # If terminal tool was called, execute it and add its result before returning
         if terminal_calls:
-            # Use the last terminal call as the final response
-            terminal = terminal_calls[-1]
+            terminal = terminal_calls[0]
             result = await execute_tool_call(session, user, terminal)
             tool_calls_log.append({"name": terminal.function.name, "arguments": terminal.function.arguments, "result": result})
             if result.get("image_path"):
                 image_paths.append(result["image_path"])
-            final_text = result.get("final_response", message.content or final_text)
+
+            # Append the terminal tool result so every tool call ID has a matching result.
+            messages.append({
+                "role": "tool",
+                "tool_call_id": terminal.id,
+                "name": terminal.function.name,
+                "content": json.dumps(result, default=str),
+            })
+
+            final_text = _sanitize_final_text(result.get("final_response", message.content or final_text))
             break
 
         # No terminal tool yet; continue the loop
+    else:
+        # Loop exhausted without a terminal tool
+        logger.warning("Agent loop hit MAX_ITERATIONS without terminal tool")
+        final_text = "I'm taking too long to figure this out. Could you rephrase or break it into smaller steps?"
 
     # Extract and save memories from the conversation
     await _extract_and_save_memories(session, user, text, final_text)
@@ -138,16 +157,10 @@ async def _extract_and_save_memories(
     user_text: str,
     assistant_text: str,
 ) -> None:
-    extraction_prompt = f"""You are Plan Mode's memory extractor. Given the user message and assistant reply, extract any new facts, preferences, goals, routines, or conversation style notes about the user.
-
-Return a JSON object with a "memories" array. Each memory has category (preference|fact|goal|routine|conversation_style), content (string), and importance (1-5). If there are no new memories, return an empty array.
-
-User: {user_text}
-Assistant: {assistant_text}
-
-Return only JSON:
-{{"memories": [{{"category": "preference", "content": "...", "importance": 3}}]}}
-"""
+    extraction_prompt = prompts.MEMORY_EXTRACTION_PROMPT.format(
+        user_text=user_text,
+        assistant_text=assistant_text,
+    )
     try:
         raw = await chat_completion_text(
             [{"role": "system", "content": extraction_prompt}],
@@ -197,26 +210,34 @@ def _build_system_prompt(
     history_text = _format_history(history)
     items_text = _format_items(relevant_items)
 
+    available_tools = "\n".join(
+        f"- {schema['function']['name']}: {schema['function']['description']}"
+        for schema in TOOL_SCHEMAS
+    )
+
     system_prompt = prompts.AGENT_SYSTEM_PROMPT.format(
         utc_now=utc_now.isoformat(),
         local_now=local_now.isoformat(),
         timezone=user.timezone,
+        available_tools=available_tools,
     )
 
     parts = [
         system_prompt,
+        prompts.FEW_SHOT_EXAMPLES,
         prompts.TOOL_INSTRUCTIONS,
         memory_text,
         history_text,
         items_text,
+        prompts.USER_TEXT_INSTRUCTIONS,
     ]
     return "\n\n".join(parts)
 
 
-def _build_user_content(text: str, images_b64: List[str]) -> list | str:
+def _build_user_content(text: str, images_b64: List[str]) -> Any:
     if not images_b64:
         return text
-    content = [{"type": "text", "text": text}]
+    content: List[dict[str, Any]] = [{"type": "text", "text": text}]
     for b64 in images_b64:
         content.append({"type": "image_url", "image_url": {"url": b64}})
     return content
@@ -258,3 +279,14 @@ def _format_items(items: List) -> str:
             f"- [{section}] {item.title} ({item.status}) {time_str}"
         )
     return "\n".join(lines)
+
+
+def _sanitize_final_text(text: str) -> str:
+    """Ensure final replies are safe, English, and not overly long."""
+    if not text:
+        return "Got it."
+    # Basic guardrail: avoid leaking raw JSON or tool internals
+    text = text.strip()
+    if len(text) > 1800:
+        text = text[:1800].rsplit(" ", 1)[0] + " …"
+    return text

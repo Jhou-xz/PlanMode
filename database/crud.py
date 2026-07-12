@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
-from sqlalchemy import select, desc, func, or_, and_
+from sqlalchemy import select, desc, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from database.models import User, Section, Item, Reminder, Memory, Message
 
@@ -60,6 +60,14 @@ async def get_or_create_user(
 
 async def set_user_timezone(session: AsyncSession, user: User, timezone: str) -> User:
     user.timezone = timezone
+    user.timezone_set = True
+    await session.commit()
+    await session.refresh(user)
+    return user
+
+
+async def set_user_summary_time(session: AsyncSession, user: User, summary_time) -> User:
+    user.summary_time = summary_time
     await session.commit()
     await session.refresh(user)
     return user
@@ -152,6 +160,35 @@ async def list_sections(session: AsyncSession, user_id: int) -> List[Section]:
     return result.scalars().all()
 
 
+async def get_section(session: AsyncSession, section_id: int) -> Optional[Section]:
+    result = await session.execute(select(Section).where(Section.id == section_id))
+    return result.scalar_one_or_none()
+
+
+async def update_section(session: AsyncSession, section_id: int, **fields) -> Optional[Section]:
+    section = await get_section(session, section_id)
+    if section is None:
+        return None
+    if section.section_type == "system":
+        # System sections can only have view_config updated.
+        fields.pop("name", None)
+    for key, value in fields.items():
+        if hasattr(section, key):
+            setattr(section, key, value)
+    await session.commit()
+    await session.refresh(section)
+    return section
+
+
+async def delete_section(session: AsyncSession, section_id: int) -> bool:
+    section = await get_section(session, section_id)
+    if section is None or section.section_type == "system":
+        return False
+    await session.delete(section)
+    await session.commit()
+    return True
+
+
 async def create_item(
     session: AsyncSession,
     user_id: int,
@@ -191,7 +228,10 @@ async def get_item(session: AsyncSession, item_id: int) -> Optional[Item]:
 
 
 async def get_item_with_section(session: AsyncSession, item_id: int) -> Optional[Item]:
-    result = await session.execute(select(Item).where(Item.id == item_id))
+    from sqlalchemy.orm import selectinload
+    result = await session.execute(
+        select(Item).where(Item.id == item_id).options(selectinload(Item.section))
+    )
     return result.scalar_one_or_none()
 
 
@@ -334,6 +374,23 @@ async def get_reminder_by_id(session: AsyncSession, reminder_id: int) -> Optiona
     return result.scalar_one_or_none()
 
 
+async def get_reminders_for_user(
+    session: AsyncSession,
+    user_id: int,
+    item_id: Optional[int] = None,
+) -> List[Reminder]:
+    stmt = (
+        select(Reminder)
+        .join(Item, Reminder.item_id == Item.id)
+        .where(Item.user_id == user_id)
+        .order_by(Reminder.remind_at)
+    )
+    if item_id is not None:
+        stmt = stmt.where(Reminder.item_id == item_id)
+    result = await session.execute(stmt)
+    return result.scalars().all()
+
+
 async def delete_reminder(session: AsyncSession, reminder_id: int) -> bool:
     reminder = await get_reminder_by_id(session, reminder_id)
     if reminder is None:
@@ -372,6 +429,11 @@ async def mark_reminder_sent(session: AsyncSession, reminder: Reminder) -> None:
     from database.models import utc_now
     reminder.sent_at = utc_now()
     await session.commit()
+
+
+async def get_memory(session: AsyncSession, memory_id: int) -> Optional[Memory]:
+    result = await session.execute(select(Memory).where(Memory.id == memory_id))
+    return result.scalar_one_or_none()
 
 
 async def create_memory(

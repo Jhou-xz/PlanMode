@@ -24,10 +24,14 @@ def bytes_to_b64_image(data: bytes, mime: str = "image/png") -> str:
     return f"data:{mime};base64,{b64}"
 
 
-async def build_image_content(message: discord.Message) -> List[str]:
+async def build_image_content(
+    message: discord.Message,
+    attachments: List[discord.Attachment] | None = None,
+) -> List[str]:
     """Return base64 data URIs for image attachments in the message."""
+    attachments = attachments or message.attachments
     images = []
-    for attachment in message.attachments:
+    for attachment in attachments:
         if not attachment.content_type or not attachment.content_type.startswith("image/"):
             continue
         data = await download_attachment(attachment.url)
