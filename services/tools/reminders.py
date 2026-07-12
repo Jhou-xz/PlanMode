@@ -1,66 +1,96 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from database import crud
+from services.scheduler import schedule_reminder
+from services.tools.schemas import ListRemindersInput, ReminderIdInput, SetReminderInput
+from utils.time import parse_iso_datetime
+from utils.tool_result import ToolResult
 
 
-def _parse_iso_datetime(value, user_timezone: str) -> datetime | None:
-    """Parse an ISO 8601 string into a timezone-aware datetime in the user's timezone."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.astimezone(ZoneInfo(user_timezone))
-    try:
-        dt = datetime.fromisoformat(value)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=ZoneInfo(user_timezone))
-        return dt.astimezone(ZoneInfo(user_timezone))
-    except Exception:
-        return None
-
-
-async def set_reminder(session: AsyncSession, user, **kwargs) -> dict:
-    item_id = kwargs.get("item_id")
-    remind_at = kwargs.get("remind_at")
-    message = kwargs.get("message")
-
-    item = await crud.get_item(session, item_id)
+async def set_reminder(session: AsyncSession, user, input: SetReminderInput) -> ToolResult:
+    item = await crud.get_item(session, input.item_id)
     if item is None:
-        return {"error": f"Item {item_id} not found"}
+        return ToolResult.error(f"Item {input.item_id} not found")
 
-    if remind_at is None:
+    remind_at_dt: datetime | None
+    if input.remind_at is None:
         if item.start_time is None:
-            return {
-                "error": "Item has no start_time; provide a remind_at explicitly or add a start_time to the item."
-            }
+            return ToolResult.error(
+                "Item has no start_time; provide a remind_at explicitly or add a start_time to the item."
+            )
         remind_at_dt = item.start_time - timedelta(minutes=15)
     else:
-        remind_at_dt = _parse_iso_datetime(remind_at, user.timezone)
+        remind_at_dt = parse_iso_datetime(input.remind_at, user.timezone)
         if remind_at_dt is None:
-            return {"error": f"Invalid ISO 8601 datetime for remind_at: {remind_at!r}"}
+            return ToolResult.error(f"Invalid ISO 8601 datetime for remind_at: {input.remind_at!r}")
 
     now = datetime.now(ZoneInfo(user.timezone))
     if remind_at_dt <= now:
-        return {"error": "Reminder time must be in the future"}
+        return ToolResult.error("Reminder time must be in the future")
 
     reminder = await crud.create_reminder(
         session=session,
         item_id=item.id,
         remind_at=remind_at_dt,
-        message=message or f"Reminder: {item.title}",
+        message=input.message or f"Reminder: {item.title}",
     )
-    return {
-        "success": True,
-        "reminder_id": reminder.id,
-        "remind_at": reminder.remind_at.isoformat(),
-    }
+
+    # Schedule the live job so the reminder actually fires.
+    schedule_reminder(reminder)
+
+    return ToolResult.success(
+        reminder_id=reminder.id,
+        remind_at=reminder.remind_at.isoformat(),
+    )
 
 
-async def delete_reminder(session: AsyncSession, user, **kwargs) -> dict:
-    reminder_id = kwargs.get("reminder_id")
-    if not reminder_id:
-        return {"error": "reminder_id is required"}
-    success = await crud.delete_reminder(session, reminder_id)
+async def list_reminders(session: AsyncSession, user, input: ListRemindersInput) -> ToolResult:
+    item_id = input.item_id
+    reminders = await crud.get_reminders_for_user(session, user.id, item_id=item_id)
+    return ToolResult.success(
+        count=len(reminders),
+        reminders=[
+            {
+                "id": r.id,
+                "item_id": r.item_id,
+                "remind_at": r.remind_at.isoformat(),
+                "message": r.message,
+                "sent": r.sent_at is not None,
+            }
+            for r in reminders
+        ],
+    )
+
+
+async def get_reminder(session: AsyncSession, user, input: ReminderIdInput) -> ToolResult:
+    reminder = await crud.get_reminder_by_id(session, input.reminder_id)
+    if reminder is None:
+        return ToolResult.error(f"Reminder {input.reminder_id} not found")
+    return ToolResult.success(
+        id=reminder.id,
+        item_id=reminder.item_id,
+        remind_at=reminder.remind_at.isoformat(),
+        message=reminder.message,
+        sent=reminder.sent_at is not None,
+    )
+
+
+async def delete_reminder(session: AsyncSession, user, input: ReminderIdInput) -> ToolResult:
+    reminder = await crud.get_reminder_by_id(session, input.reminder_id)
+    if reminder is None:
+        return ToolResult.error(f"Reminder {input.reminder_id} not found")
+    return ToolResult.error(
+        "This will permanently delete the reminder. Ask the user to confirm before proceeding.",
+        needs_confirmation=True,
+        reminder_id=input.reminder_id,
+    )
+
+
+async def confirm_delete_reminder(session: AsyncSession, user, input: ReminderIdInput) -> ToolResult:
+    success = await crud.delete_reminder(session, input.reminder_id)
     if not success:
-        return {"error": f"Reminder {reminder_id} not found"}
-    return {"success": True, "message": f"Reminder {reminder_id} deleted"}
+        return ToolResult.error(f"Reminder {input.reminder_id} not found")
+    return ToolResult.success(message=f"Reminder {input.reminder_id} deleted")

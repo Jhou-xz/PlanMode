@@ -1,6 +1,5 @@
 import discord
 import logging
-from config.settings import settings
 
 intents = discord.Intents.default()
 intents.message_content = True

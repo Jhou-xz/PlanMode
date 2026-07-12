@@ -1,49 +1,34 @@
-from datetime import datetime
-from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
-from database import crud
+
 from services import daily_view, schedule_image, status_report
+from services.tools.schemas import EmptyInput, OptionalDateInput, OptionalWeekStartInput
+from utils.tool_result import ToolResult
 
 
-def _parse_iso_datetime(value, user_timezone: str) -> datetime | None:
-    """Parse an ISO 8601 string into a timezone-aware datetime in the user's timezone."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.astimezone(ZoneInfo(user_timezone))
-    try:
-        dt = datetime.fromisoformat(value)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=ZoneInfo(user_timezone))
-        return dt.astimezone(ZoneInfo(user_timezone))
-    except Exception:
-        return None
-
-
-async def query_status_report(session: AsyncSession, user, **kwargs) -> dict:
+async def query_status_report(session: AsyncSession, user, input: EmptyInput) -> ToolResult:
     text = await status_report.build_status_report(session, user)
-    return {"status_report": text}
+    return ToolResult.success(status_report=text)
 
 
-async def generate_daily_list_view(session: AsyncSession, user, **kwargs) -> dict:
-    date = kwargs.get("date")
-    if date is not None:
-        date_dt = _parse_iso_datetime(date, user.timezone)
-        if date_dt is None:
-            return {"error": f"Invalid ISO 8601 date for date: {date!r}"}
-    else:
-        date_dt = None
+async def generate_daily_list_view(session: AsyncSession, user, input: OptionalDateInput) -> ToolResult:
+    from utils.time import parse_iso_datetime
+
+    date_dt = parse_iso_datetime(input.date, user.timezone) if input.date else None
     text = await daily_view.generate_daily_list_view(session, user, date_dt)
-    return {"daily_view": text}
+    return ToolResult.success(daily_view=text)
 
 
-async def generate_weekly_image(session: AsyncSession, user, **kwargs) -> dict:
-    week_start = kwargs.get("week_start")
-    if week_start is not None:
-        week_start_dt = _parse_iso_datetime(week_start, user.timezone)
-        if week_start_dt is None:
-            return {"error": f"Invalid ISO 8601 date for week_start: {week_start!r}"}
-    else:
-        week_start_dt = None
+async def generate_weekly_image(session: AsyncSession, user, input: OptionalWeekStartInput) -> ToolResult:
+    from utils.time import parse_iso_datetime
+
+    week_start_dt = parse_iso_datetime(input.week_start, user.timezone) if input.week_start else None
     path = await schedule_image.generate_weekly_image(session, user, week_start_dt)
-    return {"image_path": path}
+    return ToolResult.success(image_path=path)
+
+
+async def generate_daily_image(session: AsyncSession, user, input: OptionalDateInput) -> ToolResult:
+    from utils.time import parse_iso_datetime
+
+    date_dt = parse_iso_datetime(input.date, user.timezone) if input.date else None
+    path = await daily_view.generate_daily_list_image(session, user, date_dt)
+    return ToolResult.success(image_path=path)

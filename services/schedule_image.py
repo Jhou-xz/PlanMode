@@ -66,7 +66,7 @@ async def generate_weekly_image(
     top = 140
     bottom = height - 40
     col_width = (width - margin * 2) // 7
-    row_height = bottom - top
+    _ = bottom - top  # reserved vertical space per row
 
     today = now.date()
 

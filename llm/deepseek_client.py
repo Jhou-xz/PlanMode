@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import AsyncIterator, Optional
+from typing import Optional
 import openai
 from config.settings import settings
 

@@ -1,5 +1,4 @@
 import re
-from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import List
 from sqlalchemy import select, desc
@@ -95,3 +94,19 @@ def format_memory_summary(memories: List[Memory]) -> str:
     if not memories:
         return "No relevant memories yet."
     return "\n".join(f"- [{m.category}] {m.content}" for m in memories)
+
+
+async def search_memories(
+    session: AsyncSession,
+    user_id: int,
+    query: str | None = None,
+    limit: int = 10,
+) -> List[Memory]:
+    """Search memories by content, ordered by importance and recency."""
+    stmt = select(Memory).where(Memory.user_id == user_id)
+    if query:
+        like = f"%{query}%"
+        stmt = stmt.where(Memory.content.ilike(like))
+    stmt = stmt.order_by(desc(Memory.importance), desc(Memory.updated_at)).limit(limit)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())

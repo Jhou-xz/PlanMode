@@ -1,4 +1,3 @@
-from unittest.mock import patch
 from database.crud import get_or_create_user
 from services.scheduler import scheduler, schedule_daily_summary, schedule_all_daily_summaries
 

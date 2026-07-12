@@ -17,7 +17,6 @@ async def test_compress_old_messages(session):
         content="I love hiking on weekends.",
     )
     # Update created_at to be old (direct SQL update via model)
-    from database.models import Message
     msg = (await session.execute(select(Message).where(Message.user_id == user.id))).scalar_one()
     msg.created_at = old_time
     await session.commit()

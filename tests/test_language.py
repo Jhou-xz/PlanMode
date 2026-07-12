@@ -6,6 +6,7 @@ import discord
 from bot.handlers import extract_text_from_message, handle_message
 from services.agent import _build_system_prompt
 from services.tools.items import create_item
+from services.tools.schemas import CreateItemInput
 
 
 class FakeDMChannel(discord.DMChannel):
@@ -59,13 +60,15 @@ async def test_create_item_with_metadata_does_not_crash(session):
     result = await create_item(
         session,
         user,
-        section_name="Tasks",
-        title="Call carmel",
-        metadata={"priority": "high"},
+        CreateItemInput(
+            section_name="Tasks",
+            title="Call carmel",
+            metadata={"priority": "high"},
+        ),
     )
-
-    assert result.get("success") is True
-    assert result.get("title") == "Call carmel"
+    result_dict = result.to_dict()
+    assert result_dict.get("success") is True
+    assert result_dict.get("title") == "Call carmel"
 
 
 @pytest.mark.asyncio
