@@ -22,7 +22,7 @@ async def generate_daily_summary(session: AsyncSession, user: User) -> str:
     )
     memories = await get_memories_for_prompt(session, user.id, limit=10)
 
-    prompt = f"""You are Plan Mode. Write a friendly daily summary for the user in their language.
+    prompt = f"""You are Plan Mode. Write a friendly daily summary for the user in English.
 
 Yesterday's messages:
 {[m.content for m in messages if m.content]}

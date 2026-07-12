@@ -1,7 +1,22 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import crud
-from services.tools._utils import parse_datetime
+
+
+def _parse_iso_datetime(value, user_timezone: str) -> datetime | None:
+    """Parse an ISO 8601 string into a timezone-aware datetime in the user's timezone."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(ZoneInfo(user_timezone))
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo(user_timezone))
+        return dt.astimezone(ZoneInfo(user_timezone))
+    except Exception:
+        return None
 
 
 async def create_item(session: AsyncSession, user, **kwargs) -> dict:
@@ -15,9 +30,17 @@ async def create_item(session: AsyncSession, user, **kwargs) -> dict:
             "error": f"Section '{section_name}' not found. Ask the user before creating a new section, or use create_section first."
         }
 
-    start_time = parse_datetime(kwargs.get("start_time"), user.timezone)
-    end_time = parse_datetime(kwargs.get("end_time"), user.timezone)
-    due_date = parse_datetime(kwargs.get("due_date"), user.timezone)
+    start_time = _parse_iso_datetime(kwargs.get("start_time"), user.timezone)
+    if kwargs.get("start_time") is not None and start_time is None:
+        return {"error": f"Invalid ISO 8601 datetime for start_time: {kwargs.get('start_time')!r}"}
+
+    end_time = _parse_iso_datetime(kwargs.get("end_time"), user.timezone)
+    if kwargs.get("end_time") is not None and end_time is None:
+        return {"error": f"Invalid ISO 8601 datetime for end_time: {kwargs.get('end_time')!r}"}
+
+    due_date = _parse_iso_datetime(kwargs.get("due_date"), user.timezone)
+    if kwargs.get("due_date") is not None and due_date is None:
+        return {"error": f"Invalid ISO 8601 datetime for due_date: {kwargs.get('due_date')!r}"}
 
     item = await crud.create_item(
         session=session,
@@ -31,7 +54,7 @@ async def create_item(session: AsyncSession, user, **kwargs) -> dict:
         status=kwargs.get("status") or "todo",
         priority=kwargs.get("priority") if kwargs.get("priority") is not None else 3,
         tags=kwargs.get("tags") or [],
-        custom_fields=kwargs.get("metadata"),
+        metadata=kwargs.get("metadata"),
     )
 
     # Default 15-minute reminder for events with a start_time
@@ -68,7 +91,10 @@ async def update_item(session: AsyncSession, user, **kwargs) -> dict:
 
     for key in ("start_time", "end_time", "due_date"):
         if key in fields:
-            fields[key] = parse_datetime(fields[key], user.timezone)
+            parsed = _parse_iso_datetime(fields[key], user.timezone)
+            if parsed is None:
+                return {"error": f"Invalid ISO 8601 datetime for {key}: {fields[key]!r}"}
+            fields[key] = parsed
 
     updated = await crud.update_item(session, item_id, **fields)
     if updated is None:
@@ -110,13 +136,14 @@ async def mark_item_done(session: AsyncSession, user, **kwargs) -> dict:
 async def search_items(session: AsyncSession, user, **kwargs) -> dict:
     time_range = None
     if kwargs.get("time_range"):
-        try:
-            tr = kwargs["time_range"]
-            start = parse_datetime(tr.get("start"), user.timezone)
-            end = parse_datetime(tr.get("end"), user.timezone)
-            time_range = (start, end)
-        except Exception:
-            pass
+        tr = kwargs["time_range"]
+        start = _parse_iso_datetime(tr.get("start"), user.timezone)
+        if tr.get("start") is not None and start is None:
+            return {"error": f"Invalid ISO 8601 datetime for time_range.start: {tr.get('start')!r}"}
+        end = _parse_iso_datetime(tr.get("end"), user.timezone)
+        if tr.get("end") is not None and end is None:
+            return {"error": f"Invalid ISO 8601 datetime for time_range.end: {tr.get('end')!r}"}
+        time_range = (start, end)
 
     items = await crud.search_items(
         session=session,

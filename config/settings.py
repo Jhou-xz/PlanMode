@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     summary_default_time: str = "22:00"
     memory_top_n: int = 10
     memory_compression_threshold: int = 500
+    log_level: str = "INFO"
 
     class Config:
         env_file = ".env"

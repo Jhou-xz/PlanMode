@@ -1,3 +1,5 @@
+import logging
+
 import discord
 from database.core import async_session
 from database.crud import get_or_create_user, set_user_timezone
@@ -8,21 +10,22 @@ from services.transcription import transcribe_audio
 from services.timezone import resolve_timezone
 
 
+logger = logging.getLogger(__name__)
+
+
 async def extract_text_from_message(message: discord.Message) -> dict:
-    """Returns {"text": str, "type": str, "language": str | None}"""
+    """Returns {"text": str, "type": str, "language": str}."""
     text = message.content.strip()
     detected_type = "text"
-    language = None
 
     if message.flags.voice and message.attachments:
         audio = message.attachments[0]
         audio_bytes = await audio.read()
         result = await transcribe_audio(audio_bytes, filename=audio.filename)
         text = result["text"]
-        language = result["language"]
         detected_type = "voice"
 
-    return {"text": text, "type": detected_type, "language": language}
+    return {"text": text, "type": detected_type, "language": "en"}
 
 
 async def _is_timezone_change_request(text: str) -> bool:
@@ -68,51 +71,53 @@ async def handle_message(message: discord.Message):
     if message.author.bot or not isinstance(message.channel, discord.DMChannel):
         return
 
-    async with async_session() as session:
-        user = await get_or_create_user(
-            session,
-            discord_user_id=str(message.author.id),
-            discord_username=str(message.author),
-        )
+    async with message.channel.typing():
+        try:
+            async with async_session() as session:
+                user = await get_or_create_user(
+                    session,
+                    discord_user_id=str(message.author.id),
+                    discord_username=str(message.author),
+                )
 
-        extracted = await extract_text_from_message(message)
-        if extracted["type"] == "voice" and extracted["text"]:
-            await message.channel.send(f"🎤 I heard: {extracted['text'][:1900]}")
+                extracted = await extract_text_from_message(message)
+                if extracted["type"] == "voice" and extracted["text"]:
+                    await message.channel.send(f"🎤 I heard: {extracted['text'][:1900]}")
 
-        if await _is_timezone_change_request(extracted["text"]):
-            handled = await _handle_timezone_input(message, user, session)
-            if handled:
-                return
+                if await _is_timezone_change_request(extracted["text"]):
+                    handled = await _handle_timezone_input(message, user, session)
+                    if handled:
+                        return
 
-        has_image = any(
-            a.content_type and a.content_type.startswith("image/")
-            for a in message.attachments
-        )
-        images_b64 = await build_image_content(message) if has_image else []
+                has_image = any(
+                    a.content_type and a.content_type.startswith("image/")
+                    for a in message.attachments
+                )
+                images_b64 = await build_image_content(message) if has_image else []
 
-        # If the LLM later rejects the image, we can fall back to OCR; the agent
-        # will receive the image in the message content. We do not OCR here by
-        # default to avoid extra work when the LLM succeeds.
+                # If the LLM later rejects the image, we can fall back to OCR; the agent
+                # will receive the image in the message content. We do not OCR here by
+                # default to avoid extra work when the LLM succeeds.
 
-        final_text, image_paths = await run_agent(
-            session,
-            user,
-            extracted["text"],
-            images_b64=images_b64,
-            raw_type=extracted["type"],
-        )
+                final_text, image_paths = await run_agent(
+                    session,
+                    user,
+                    extracted["text"],
+                    images_b64=images_b64,
+                    raw_type=extracted["type"],
+                    language=extracted["language"],
+                )
 
-        await message.channel.send(final_text[:1900])
+                await message.channel.send(final_text[:1900])
 
-        files_to_send = []
-        for path in image_paths:
-            try:
-                files_to_send.append(discord.File(path))
-            except Exception:
-                pass
-        if files_to_send:
-            await message.channel.send(files=files_to_send)
-
-        if extracted.get("language"):
-            user.preferred_language = extracted["language"]
-            await session.commit()
+                files_to_send = []
+                for path in image_paths:
+                    try:
+                        files_to_send.append(discord.File(path))
+                    except Exception:
+                        pass
+                if files_to_send:
+                    await message.channel.send(files=files_to_send)
+        except Exception:
+            logger.exception("Error handling message from %s", message.author)
+            await message.channel.send("I ran into a problem. The error has been logged.")

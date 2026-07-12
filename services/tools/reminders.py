@@ -2,7 +2,21 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import crud
-from services.tools._utils import parse_datetime
+
+
+def _parse_iso_datetime(value, user_timezone: str) -> datetime | None:
+    """Parse an ISO 8601 string into a timezone-aware datetime in the user's timezone."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(ZoneInfo(user_timezone))
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo(user_timezone))
+        return dt.astimezone(ZoneInfo(user_timezone))
+    except Exception:
+        return None
 
 
 async def set_reminder(session: AsyncSession, user, **kwargs) -> dict:
@@ -21,9 +35,9 @@ async def set_reminder(session: AsyncSession, user, **kwargs) -> dict:
             }
         remind_at_dt = item.start_time - timedelta(minutes=15)
     else:
-        remind_at_dt = parse_datetime(remind_at, user.timezone)
+        remind_at_dt = _parse_iso_datetime(remind_at, user.timezone)
         if remind_at_dt is None:
-            return {"error": f"Could not parse remind_at: {remind_at}"}
+            return {"error": f"Invalid ISO 8601 datetime for remind_at: {remind_at!r}"}
 
     now = datetime.now(ZoneInfo(user.timezone))
     if remind_at_dt <= now:

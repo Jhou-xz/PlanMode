@@ -31,10 +31,10 @@ TOOL_SCHEMAS: List[dict] = [
                     "content": {"type": "string"},
                     "start_time": {
                         "type": "string",
-                        "description": "ISO 8601 datetime or natural language (e.g. 'next Tuesday at 3pm')."
+                        "description": "ISO 8601 datetime in the user's timezone (e.g. '2024-06-10T15:00:00+08:00')."
                     },
-                    "end_time": {"type": "string", "description": "ISO 8601 datetime or natural language."},
-                    "due_date": {"type": "string", "description": "ISO 8601 datetime or natural language."},
+                    "end_time": {"type": "string", "description": "ISO 8601 datetime in the user's timezone."},
+                    "due_date": {"type": "string", "description": "ISO 8601 datetime in the user's timezone."},
                     "status": {
                         "type": "string",
                         "enum": ["todo", "done", "archived", "in_progress", "cancelled"],
@@ -60,9 +60,9 @@ TOOL_SCHEMAS: List[dict] = [
                     "title": {"type": "string"},
                     "content": {"type": "string"},
                     "section_name": {"type": "string"},
-                    "start_time": {"type": "string"},
-                    "end_time": {"type": "string"},
-                    "due_date": {"type": "string"},
+                    "start_time": {"type": "string", "description": "ISO 8601 datetime in the user's timezone."},
+                    "end_time": {"type": "string", "description": "ISO 8601 datetime in the user's timezone."},
+                    "due_date": {"type": "string", "description": "ISO 8601 datetime in the user's timezone."},
                     "status": {"type": "string", "enum": ["todo", "done", "archived", "in_progress", "cancelled"]},
                     "priority": {"type": "integer", "minimum": 1, "maximum": 5},
                     "tags": {"type": "array", "items": {"type": "string"}},
@@ -145,7 +145,7 @@ TOOL_SCHEMAS: List[dict] = [
                 "type": "object",
                 "properties": {
                     "item_id": {"type": "integer"},
-                    "remind_at": {"type": "string", "description": "ISO 8601 datetime or natural language."},
+                    "remind_at": {"type": "string", "description": "ISO 8601 datetime in the user's timezone."},
                     "message": {"type": "string"},
                 },
                 "required": ["item_id"],
@@ -180,7 +180,7 @@ TOOL_SCHEMAS: List[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "date": {"type": "string", "description": "ISO 8601 date or natural language. Defaults to today."},
+                    "date": {"type": "string", "description": "ISO 8601 date in the user's timezone (e.g. '2024-06-10'). Defaults to today."},
                 },
             },
         },
@@ -193,7 +193,7 @@ TOOL_SCHEMAS: List[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "week_start": {"type": "string", "description": "ISO 8601 date for Monday. Defaults to current week."},
+                    "week_start": {"type": "string", "description": "ISO 8601 date for Monday in the user's timezone. Defaults to current week."},
                 },
             },
         },

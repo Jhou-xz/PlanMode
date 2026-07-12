@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo
 from typing import List, Optional, Tuple
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import crud
 from database.models import Message
@@ -23,6 +24,7 @@ async def run_agent(
     text: str,
     images_b64: Optional[List[str]] = None,
     raw_type: str = "text",
+    language: Optional[str] = None,
 ) -> Tuple[str, List[str]]:
     """
     Run the tool-calling agent loop for a user message.
@@ -34,7 +36,9 @@ async def run_agent(
     memories = await get_memories_for_prompt(session, user.id, limit=20)
     relevant_items = await _fetch_relevant_items(session, user, text)
 
-    system_prompt = _build_system_prompt(user, history, memories, relevant_items)
+    system_prompt = _build_system_prompt(
+        user, history, memories, relevant_items
+    )
     user_content = _build_user_content(text, images_b64)
 
     messages: List[dict] = [
@@ -197,7 +201,6 @@ def _build_system_prompt(
         utc_now=utc_now.isoformat(),
         local_now=local_now.isoformat(),
         timezone=user.timezone,
-        preferred_language=user.preferred_language or "auto-detect",
     )
 
     parts = [
