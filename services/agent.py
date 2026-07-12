@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo
 from typing import Any, List, Optional, Tuple
@@ -71,6 +72,22 @@ async def run_agent(
         action_calls = [tc for tc in tool_calls if tc.function.name not in TERMINAL_TOOLS]
         terminal_calls = [tc for tc in tool_calls if tc.function.name in TERMINAL_TOOLS]
 
+        # Deduplicate action tool calls by (name, arguments), keeping the first occurrence.
+        seen_action_keys = set()
+        deduplicated_action_calls = []
+        for tc in action_calls:
+            key = (tc.function.name, tc.function.arguments)
+            if key in seen_action_keys:
+                logger.warning(
+                    "Duplicate action tool call removed: %s with arguments %s",
+                    tc.function.name,
+                    tc.function.arguments,
+                )
+                continue
+            seen_action_keys.add(key)
+            deduplicated_action_calls.append(tc)
+        action_calls = deduplicated_action_calls
+
         # Validate: only one terminal tool per turn
         if len(terminal_calls) > 1:
             logger.warning("Model emitted multiple terminal tools; keeping only the last one")
@@ -86,7 +103,8 @@ async def run_agent(
             if result.get("image_path"):
                 image_paths.append(result["image_path"])
 
-        # Add assistant message with tool calls
+        # Add assistant message with tool calls (only those we will execute)
+        kept_tool_calls = action_calls + terminal_calls
         messages.append({
             "role": "assistant",
             "content": message.content or "",
@@ -96,7 +114,7 @@ async def run_agent(
                     "type": tc.type,
                     "function": {"name": tc.function.name, "arguments": tc.function.arguments},
                 }
-                for tc in tool_calls
+                for tc in kept_tool_calls
             ],
         })
 
@@ -248,7 +266,8 @@ def _format_memories(memories: List) -> str:
         return f"{prompts.MEMORY_FORMAT_HEADER}\nNo relevant memories yet."
     lines = [prompts.MEMORY_FORMAT_HEADER]
     for m in memories:
-        lines.append(f"- [{m.category}] {m.content} (importance: {m.importance})")
+        content = _strip_cjk(m.content or "")
+        lines.append(f"- [{m.category}] {content} (importance: {m.importance})")
     return "\n".join(lines)
 
 
@@ -259,7 +278,7 @@ def _format_history(messages: List[Message]) -> str:
     for m in messages:
         ts = m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else ""
         role = m.role.capitalize()
-        text = (m.content or "")[:300].replace("\n", " ")
+        text = _strip_cjk((m.content or "")[:300].replace("\n", " "))
         lines.append(f"[{ts}] {role}: {text}")
     return "\n".join(lines)
 
@@ -275,18 +294,38 @@ def _format_items(items: List) -> str:
             time_str = item.start_time.isoformat()
         elif item.due_date:
             time_str = f"due {item.due_date.isoformat()}"
+        title = _strip_cjk(item.title or "")
         lines.append(
-            f"- [{section}] {item.title} ({item.status}) {time_str}"
+            f"- [{section}] {title} ({item.status}) {time_str}"
         )
     return "\n".join(lines)
+
+
+def _strip_cjk(text: str) -> str:
+    """Remove CJK (Chinese, Japanese, Korean) characters from text."""
+    if not text:
+        return text
+    cjk_pattern = re.compile(
+        r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff"
+        r"\u3040-\u30ff\u31f0-\u31ff"
+        r"\uac00-\ud7af\u1100-\u11ff\u3130-\u318f"
+        r"\u3000-\u303f\uff00-\uffef]"
+    )
+    return cjk_pattern.sub("", text)
 
 
 def _sanitize_final_text(text: str) -> str:
     """Ensure final replies are safe, English, and not overly long."""
     if not text:
         return "Got it."
-    # Basic guardrail: avoid leaking raw JSON or tool internals
     text = text.strip()
+    # Strip CJK characters (Chinese, Japanese, Korean) to enforce English-only replies
+    text = _strip_cjk(text)
+    # Collapse excessive whitespace and newlines
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = text.strip()
+    # Basic guardrail: avoid leaking raw JSON or tool internals
     if len(text) > 1800:
         text = text[:1800].rsplit(" ", 1)[0] + " …"
-    return text
+    return text if text else "Got it."

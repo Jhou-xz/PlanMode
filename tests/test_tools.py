@@ -1,8 +1,9 @@
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 from database.crud import get_or_create_user, get_section_by_slug
+from services.agent import run_agent
 from services.scheduler import scheduler
 from services.tools import TOOL_SCHEMAS, TERMINAL_TOOLS, execute_tool_call
 from services.tools.schemas import CreateItemInput
@@ -108,3 +109,41 @@ async def test_create_item_input_model(session):
     result = await create_item(session, user, input_model)
     assert result.to_dict()["success"] is True
     assert result.to_dict()["title"] == "Test task"
+
+
+async def test_agent_deduplicates_duplicate_action_tool_calls(session):
+    user = await get_or_create_user(
+        session, discord_user_id="100000000000000200", discord_username="dedup"
+    )
+
+    # Model returns two identical query_status_report calls and one terminal send_message.
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = None
+    response.choices[0].message.tool_calls = [
+        FakeToolCall("query_status_report", "{}", "call_status_1"),
+        FakeToolCall("query_status_report", "{}", "call_status_2"),
+        FakeToolCall("send_message", '{"text": "Here is your status report."}', "call_msg_1"),
+    ]
+
+    executed_names = []
+
+    async def fake_execute(session, user, tool_call):
+        executed_names.append(tool_call.function.name)
+        if tool_call.function.name == "query_status_report":
+            return {"success": True, "report": "All sections are clear."}
+        return {"success": True, "final_response": "Here is your status report."}
+
+    with (
+        patch("services.agent.chat_completion", new_callable=AsyncMock, return_value=response),
+        patch(
+            "services.agent.chat_completion_text",
+            new_callable=AsyncMock,
+            return_value='{"memories": []}',
+        ),
+        patch("services.agent.execute_tool_call", new_callable=AsyncMock, side_effect=fake_execute),
+    ):
+        await run_agent(session, user, "status report")
+
+    assert executed_names.count("query_status_report") == 1
+    assert executed_names.count("send_message") == 1

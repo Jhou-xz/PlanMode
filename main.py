@@ -12,6 +12,7 @@ from services.scheduler import (
     schedule_all_memory_compression,
     schedule_all_pending_reminders,
 )
+from utils.process_guard import ensure_single_instance
 
 LOG_FILE = "/root/plan-mode-project/bot.log"
 
@@ -38,6 +39,7 @@ async def on_message(message):
 
 async def main():
     setup_logging()
+    ensure_single_instance()
     await init_db()
     scheduler.start()
     await schedule_all_pending_reminders()

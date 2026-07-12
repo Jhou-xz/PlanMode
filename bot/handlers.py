@@ -1,3 +1,4 @@
+import io
 import logging
 from datetime import time
 
@@ -174,6 +175,13 @@ async def _llm_parse_summary_time(text: str) -> time | None:
         return None
 
 
+async def _send_text_as_file(channel, text: str, filename: str = "report.txt"):
+    """Send long text as a Discord file attachment in a single message."""
+    data = text.encode("utf-8")
+    file = discord.File(filename=filename, fp=io.BytesIO(data))
+    await channel.send(file=file)
+
+
 async def _send_in_chunks(channel, text: str):
     """Split long replies across multiple Discord messages at paragraph boundaries."""
     if len(text) <= MAX_MESSAGE_LENGTH:
@@ -276,7 +284,10 @@ async def handle_message(message: discord.Message):
                     language=extracted["language"],
                 )
 
-                await _send_in_chunks(message.channel, final_text)
+                if len(final_text) > MAX_MESSAGE_LENGTH:
+                    await _send_text_as_file(message.channel, final_text)
+                else:
+                    await _send_in_chunks(message.channel, final_text)
 
                 if image_paths:
                     await _send_image_files(message.channel, image_paths)

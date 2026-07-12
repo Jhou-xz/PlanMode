@@ -4,7 +4,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 
 from bot.handlers import extract_text_from_message, handle_message
-from services.agent import _build_system_prompt
+from services.agent import (
+    _build_system_prompt,
+    _format_history,
+    _format_items,
+    _format_memories,
+    _sanitize_final_text,
+    _strip_cjk,
+)
 from services.tools.items import create_item
 from services.tools.schemas import CreateItemInput
 
@@ -48,8 +55,17 @@ async def test_build_system_prompt_requires_english_only():
     user.preferred_language = "zh-cn"
 
     prompt = _build_system_prompt(user, [], [], [])
-    assert "Always respond in English only" in prompt
-    assert "you must reply in English" in prompt
+    assert "ALWAYS respond in English only" in prompt
+    assert "you MUST reply in English" in prompt
+
+
+def test_sanitize_final_text_removes_cjk_and_cleans_whitespace():
+    raw = "Hello 你好 world!\n\n\n\nこんにちは   안녕하세요"
+    cleaned = _sanitize_final_text(raw)
+    assert "你" not in cleaned
+    assert "こん" not in cleaned
+    assert "안녕" not in cleaned
+    assert cleaned == "Hello world!"
 
 
 @pytest.mark.asyncio
@@ -104,3 +120,84 @@ async def test_handle_message_passes_english_language_to_run_agent():
     assert run_agent_mock.called
     _, kwargs = run_agent_mock.call_args
     assert kwargs.get("language") == "en"
+
+
+def test_strip_cjk_removes_cjk_characters():
+    raw = "Hello 你好 world こんにちは 안녕하세요"
+    cleaned = _strip_cjk(raw)
+    assert cleaned == "Hello  world  "
+    assert "你" not in cleaned
+    assert "こん" not in cleaned
+    assert "안녕" not in cleaned
+
+
+def test_format_memories_strips_cjk():
+    memory = MagicMock()
+    memory.category = "preference"
+    memory.content = "likes coffee 咖啡"
+    memory.importance = 3
+
+    formatted = _format_memories([memory])
+    assert "咖啡" not in formatted
+    assert "likes coffee " in formatted
+
+
+def test_format_history_strips_cjk():
+    message = MagicMock()
+    message.created_at = None
+    message.role = "user"
+    message.content = "hi 你好"
+
+    formatted = _format_history([message])
+    assert "你好" not in formatted
+    assert "hi " in formatted
+
+
+def test_format_items_strips_cjk():
+    section = MagicMock()
+    section.name = "Tasks"
+
+    item = MagicMock()
+    item.section = section
+    item.title = "meeting 会议"
+    item.status = "todo"
+    item.start_time = None
+    item.due_date = None
+
+    formatted = _format_items([item])
+    assert "会议" not in formatted
+    assert "meeting " in formatted
+
+
+def test_build_system_prompt_strips_cjk_from_context():
+    user = MagicMock()
+    user.timezone = "UTC"
+    user.preferred_language = "zh-cn"
+
+    section = MagicMock()
+    section.name = "Schedule"
+
+    item = MagicMock()
+    item.section = section
+    item.title = "doctor 医生"
+    item.status = "todo"
+    item.start_time = None
+    item.due_date = None
+
+    message = MagicMock()
+    message.created_at = None
+    message.role = "assistant"
+    message.content = "Done 完成"
+
+    memory = MagicMock()
+    memory.category = "fact"
+    memory.content = "allergic to nuts 对坚果过敏"
+    memory.importance = 4
+
+    prompt = _build_system_prompt(user, [message], [memory], [item])
+    assert "医生" not in prompt
+    assert "完成" not in prompt
+    assert "对坚果过敏" not in prompt
+    assert "doctor " in prompt
+    assert "Done " in prompt
+    assert "allergic to nuts " in prompt
